@@ -43,6 +43,16 @@ local GAP     = 4
 local ROW_GAP = 14   -- extra room for the timer text under each row
 local TICK    = 0.25
 
+-- Debuff border colours per dispel type (3.3.5 returns "Magic", "Curse",
+-- "Disease", "Poison" or nil for undispellable).
+local DEBUFF_COLORS = {
+  Magic   = { 0.20, 0.55, 1.00 },
+  Curse   = { 0.60, 0.25, 0.95 },
+  Disease = { 0.60, 0.40, 0.20 },
+  Poison  = { 0.20, 0.75, 0.25 },
+  none    = { 0.70, 0.15, 0.15 },  -- unchanged default red
+}
+
 local BLIZZ_FRAMES = { "BuffFrame", "TemporaryEnchantFrame", "ConsolidatedBuffs" }
 
 local PREVIEW_BACKDROP = {
@@ -188,6 +198,17 @@ end
 -- ---------------------------------------------------------------------------
 -- 5. Aura data refresh
 -- ---------------------------------------------------------------------------
+-- Debuff border colouring by dispel type. The colour is a plain table lookup
+-- and is only pushed to the backdrop when it actually changes, so a steady
+-- aura costs one string compare per refresh and no API call at all.
+local function SetDebuffBorder(b, dtype)
+  local key = dtype or "none"
+  if b.JUI_dtype == key then return end
+  b.JUI_dtype = key
+  local c = DEBUFF_COLORS[key] or DEBUFF_COLORS.none
+  b.jborder:SetBackdropBorderColor(c[1], c[2], c[3], 1)
+end
+
 local function Fill(b, icon, count, expires)
   if b.JUI_shownIcon ~= icon then
     b.icon:SetTexture(icon)
@@ -247,9 +268,10 @@ end
 -- ever non-nil when the user actually has entries, so the default path costs
 -- exactly one upvalue test per aura.
 local function Refresh(g, query, filter, maxButtons, shown, blacklist)
+  local colorize = (g.kind == "debuff")
   for i = 1, 40 do
     if shown >= maxButtons then break end
-    local name, _, icon, count, _, _, expires, _, _, _, spellID = query("player", i)
+    local name, _, icon, count, dtype, _, expires, _, _, _, spellID = query("player", i)
     if not name then break end
     if blacklist and spellID and blacklist[spellID] then
       -- Filtered out: keep scanning, the aura index just does not get a button.
@@ -259,6 +281,7 @@ local function Refresh(g, query, filter, maxButtons, shown, blacklist)
       shown = shown + 1
       b.JUI_enchantSlot = nil
       b.JUI_auraIndex, b.JUI_auraFilter = i, filter
+      if colorize then SetDebuffBorder(b, dtype) end
       Fill(b, icon, count, expires)
     end
   end
