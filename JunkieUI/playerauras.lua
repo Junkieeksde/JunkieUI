@@ -60,6 +60,9 @@ local state = {
   dirty    = true,
   preview  = false,
   previews = {},
+  -- Resolved copy of J.db.debuffBlacklist, or nil while the list is empty so
+  -- the refresh loop skips the lookup entirely.
+  blacklist = nil,
 }
 
 -- ---------------------------------------------------------------------------
@@ -240,17 +243,24 @@ end
 -- hide the tail. `query` is UnitBuff or UnitDebuff (both are Blizzard's
 -- C-filtered HELPFUL/HARMFUL lists), `filter` the tooltip hint. The list has
 -- no gaps, so the scan stops at the first empty slot instead of probing all 40.
-local function Refresh(g, query, filter, maxButtons, shown)
+-- `blacklist` is an optional spellID -> true hash map (O(1) lookup); it is only
+-- ever non-nil when the user actually has entries, so the default path costs
+-- exactly one upvalue test per aura.
+local function Refresh(g, query, filter, maxButtons, shown, blacklist)
   for i = 1, 40 do
     if shown >= maxButtons then break end
-    local name, _, icon, count, _, _, expires = query("player", i)
+    local name, _, icon, count, _, _, expires, _, _, _, spellID = query("player", i)
     if not name then break end
-    local b = g.buttons[shown + 1]
-    if not b then break end
-    shown = shown + 1
-    b.JUI_enchantSlot = nil
-    b.JUI_auraIndex, b.JUI_auraFilter = i, filter
-    Fill(b, icon, count, expires)
+    if blacklist and spellID and blacklist[spellID] then
+      -- Filtered out: keep scanning, the aura index just does not get a button.
+    else
+      local b = g.buttons[shown + 1]
+      if not b then break end
+      shown = shown + 1
+      b.JUI_enchantSlot = nil
+      b.JUI_auraIndex, b.JUI_auraFilter = i, filter
+      Fill(b, icon, count, expires)
+    end
   end
 
   if shown > maxButtons then shown = maxButtons end
@@ -383,7 +393,7 @@ J:AddModule(function()
     if state.dirty then
       state.dirty = false
       Refresh(buffs, UnitBuff, "HELPFUL", MAX_BUFFS, FillEnchants(buffs))
-      Refresh(debuffs, UnitDebuff, "HARMFUL", MAX_DEBUFFS, 0)
+      Refresh(debuffs, UnitDebuff, "HARMFUL", MAX_DEBUFFS, 0, state.blacklist)
     end
 
     local now = GetTime()
@@ -412,6 +422,19 @@ J:AddModule(function()
   function J:UpdateDebuffPlacement()
     PlaceDebuffs()
   end
+
+  -- Blacklist: resolved once here (and on every config edit) instead of on
+  -- every refresh. An empty list resolves to nil, which keeps the aura loop
+  -- on exactly the same code path it had before this feature existed.
+  function J:UpdateDebuffBlacklist()
+    local t = J.db and J.db.debuffBlacklist
+    state.blacklist = (t and next(t) ~= nil) and t or nil
+    state.dirty = true
+    if not driver:IsShown() then driver:Show() end
+  end
+  J:UpdateDebuffBlacklist()
+
+
 
 
   function J:SetPlayerAuraPreview(on)

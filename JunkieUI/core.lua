@@ -39,6 +39,7 @@ J.defaults = {
   buffSize = 30,          -- player buff icon size
   playerDebuffSize = 34,  -- player debuff icon size (under the minimap)
   debuffsOnFrame = false, -- dock the debuff block above the player unit frame
+  debuffBlacklist = {},   -- [spellID] = true, hidden player debuffs (O(1) lookup)
   -- totem bar (shaman)
   totemBar = true,        -- show the totem / multicast bar
   totemUnlocked = false,  -- allow dragging it
@@ -231,7 +232,17 @@ J:SetScript("OnEvent", function(self, event, arg1)
   if event == "ADDON_LOADED" and arg1 == ADDON then
     JunkieUIDB = JunkieUIDB or {}
     for k, v in pairs(J.defaults) do
-      if JunkieUIDB[k] == nil then JunkieUIDB[k] = v end
+      if type(v) == "table" then
+        -- Table defaults must never be shared with the defaults table itself,
+        -- otherwise a saved edit would write straight into J.defaults.
+        if type(JunkieUIDB[k]) ~= "table" then
+          local copy = {}
+          for dk, dv in pairs(v) do copy[dk] = dv end
+          JunkieUIDB[k] = copy
+        end
+      elseif JunkieUIDB[k] == nil then
+        JunkieUIDB[k] = v
+      end
     end
     -- Drop keys from removed features so old saved variables stay clean.
     for k in pairs(JunkieUIDB) do

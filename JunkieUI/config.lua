@@ -597,6 +597,130 @@ local function BuildPanel()
     J.db.debuffsOnFrame = v
     if J.UpdateDebuffPlacement then J:UpdateDebuffPlacement() end
   end)
+  y = y - 40
+
+  -- Blacklist ----------------------------------------------------------------
+  -- Stored as a hash map (JunkieUIDB.debuffBlacklist[spellID] = true) so the
+  -- aura refresh can test membership in O(1). This panel only ever touches the
+  -- table on a click / Enter press; nothing here runs per frame.
+  Header(bd, "Blacklist debuffs", y); y = y - 24
+  Hint(bd, "Type an aura ID and press Enter to hide that debuff.", y); y = y - 22
+
+  local blBox = CreateFrame("Frame", nil, bd)
+  blBox:SetSize(120, 22)
+  blBox:SetPoint("TOPLEFT", bd, "TOPLEFT", 16, y)
+  Flat(blBox, BG[1], BG[2], BG[3], 1)
+
+  local blEdit = CreateFrame("EditBox", nil, blBox)
+  blEdit:SetPoint("TOPLEFT", blBox, 5, -1)
+  blEdit:SetPoint("BOTTOMRIGHT", blBox, -5, 1)
+  blEdit:SetFont(J.font, 11)
+  blEdit:SetJustifyH("LEFT")
+  blEdit:SetAutoFocus(false)
+  blEdit:SetNumeric(true)          -- digits only: no bad input can reach the db
+  blEdit:SetMaxLetters(9)
+  blEdit:SetTextInsets(0, 0, 0, 0)
+  blEdit:SetTextColor(TXT[1], TXT[2], TXT[3])
+  blEdit:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+
+  local BL_ROWS, BL_ROW_H = 12, 18
+  local blList = CreateFrame("Frame", nil, bd)
+  blList:SetPoint("TOPLEFT", bd, "TOPLEFT", 16, y - 30)
+  blList:SetSize(220, BL_ROWS * BL_ROW_H)
+
+  local blEmpty = Label(blList, 11, "LEFT")
+  blEmpty:SetPoint("TOPLEFT", blList, "TOPLEFT", 0, -2)
+  blEmpty:SetText("No debuffs blacklisted.")
+  blEmpty:SetTextColor(DIM[1], DIM[2], DIM[3])
+
+  local blRows, blIDs, blOffset = {}, {}, 0
+  local RefreshBlacklist
+
+  local function BlacklistRow(i)
+    local row = blRows[i]
+    if row then return row end
+    row = CreateFrame("Frame", nil, blList)
+    row:SetSize(220, BL_ROW_H - 2)
+    row:SetPoint("TOPLEFT", blList, "TOPLEFT", 0, -(i - 1) * BL_ROW_H)
+
+    row.text = Label(row, 11, "LEFT")
+    row.text:SetPoint("LEFT", row, "LEFT", 0, 0)
+
+    row.del = MakeButton(row, "x", 16, 16, function(self)
+      local id = self:GetParent().auraID
+      if id and J.db.debuffBlacklist then
+        J.db.debuffBlacklist[id] = nil
+        if J.UpdateDebuffBlacklist then J:UpdateDebuffBlacklist() end
+        RefreshBlacklist()
+      end
+    end)
+    row.del:SetPoint("LEFT", row, "LEFT", 92, 0)
+
+    blRows[i] = row
+    return row
+  end
+
+  -- Rebuilds the visible rows from the hash map. Called only on add/remove and
+  -- when the panel is first built.
+  function RefreshBlacklist()
+    for i = #blIDs, 1, -1 do blIDs[i] = nil end
+    local t = J.db.debuffBlacklist
+    if type(t) == "table" then
+      for id in pairs(t) do
+        if type(id) == "number" then blIDs[#blIDs + 1] = id end
+      end
+      table.sort(blIDs)
+    end
+
+    local total = #blIDs
+    local maxOffset = total - BL_ROWS
+    if maxOffset < 0 then maxOffset = 0 end
+    if blOffset > maxOffset then blOffset = maxOffset end
+
+    for i = 1, BL_ROWS do
+      local id = blIDs[i + blOffset]
+      if id then
+        local row = BlacklistRow(i)
+        row.auraID = id
+        row.text:SetText("Aura " .. id)
+        row:Show()
+      elseif blRows[i] then
+        blRows[i].auraID = nil
+        blRows[i]:Hide()
+      end
+    end
+
+    if total > 0 then blEmpty:Hide() else blEmpty:Show() end
+  end
+
+  blList:EnableMouseWheel(true)
+  blList:SetScript("OnMouseWheel", function(self, delta)
+    local maxOffset = #blIDs - BL_ROWS
+    if maxOffset < 1 then return end
+    blOffset = blOffset - delta
+    if blOffset < 0 then blOffset = 0 end
+    if blOffset > maxOffset then blOffset = maxOffset end
+    RefreshBlacklist()
+  end)
+
+  local function AddBlacklistID()
+    local id = tonumber(blEdit:GetText())
+    blEdit:SetText("")
+    blEdit:ClearFocus()
+    if not id or id <= 0 then return end
+    id = math.floor(id)
+    if type(J.db.debuffBlacklist) ~= "table" then J.db.debuffBlacklist = {} end
+    J.db.debuffBlacklist[id] = true
+    if J.UpdateDebuffBlacklist then J:UpdateDebuffBlacklist() end
+    RefreshBlacklist()
+  end
+
+  blEdit:SetScript("OnEnterPressed", AddBlacklistID)
+
+  local blAdd = MakeButton(bd, "Add", 60, 22, AddBlacklistID)
+  blAdd:SetPoint("LEFT", blBox, "RIGHT", 8, 0)
+
+  RefreshBlacklist()
 
   -- Page 5: Minimap ---------------------------------------------------------
   local mm = pages[5]
