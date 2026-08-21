@@ -1,0 +1,14 @@
+## Interface: 30300
+## Title: Junkie CD |cff9d9d9dCooldown Manager|r
+## Notes: Junkie style cooldown, aura and power tracker. Built to fold into JunkieUI. /jcd
+## Version: 2.5.1
+## Author: Junkie
+## RequiredDeps: JunkieUI
+## LoadOnDemand: 1
+## SavedVariables: JunkieCDDB
+
+core.lua
+glow.lua
+bars.lua
+picker.lua
+config.lua
