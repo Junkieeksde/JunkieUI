@@ -116,6 +116,7 @@ local function StopCast(self)
   self:SetScript("OnUpdate", nil)
   self:Hide()
   self.casting, self.channeling = false, false
+  self.activeCastID = nil
 end
 
 local function StartCast(self, channel)
@@ -172,7 +173,11 @@ local function Refresh(self)
   end
 end
 
-local function OnEvent(self, event, unit)
+-- Spam protection: every cast attempt carries a unique lineID (4th argument on
+-- the spellcast events). Extra key presses while a cast is running fire
+-- UNIT_SPELLCAST_FAILED for a *different* lineID, which used to wipe the bar.
+-- Only events carrying the lineID of the running cast may stop it.
+local function OnEvent(self, event, unit, spellName, spellRank, lineID)
   if not self.enabled then return StopCast(self) end
   if event == "PLAYER_TARGET_CHANGED" or event == "PLAYER_ENTERING_WORLD" then
     return Refresh(self)
@@ -181,13 +186,27 @@ local function OnEvent(self, event, unit)
   if unit ~= self.unit then return end
 
   if event == "UNIT_SPELLCAST_START" then
+    self.activeCastID = lineID
     StartCast(self, false)
   elseif event == "UNIT_SPELLCAST_CHANNEL_START" then
+    self.activeCastID = nil          -- channels do not carry a cast lineID
     StartCast(self, true)
   elseif event == "UNIT_SPELLCAST_DELAYED" then
     if self.casting then StartCast(self, false) end
   elseif event == "UNIT_SPELLCAST_CHANNEL_UPDATE" then
     if self.channeling then StartCast(self, true) end
+  elseif event == "UNIT_SPELLCAST_CHANNEL_STOP" then
+    if self.channeling then StopCast(self) end
+  elseif event == "UNIT_SPELLCAST_FAILED"
+      or event == "UNIT_SPELLCAST_INTERRUPTED"
+      or event == "UNIT_SPELLCAST_STOP"
+      or event == "UNIT_SPELLCAST_SUCCEEDED" then
+    -- Ignore anything belonging to another cast attempt (key spam).
+    if lineID and self.activeCastID and lineID ~= self.activeCastID then return end
+    -- No tracked cast (target bar, channel, or a bar restored by Refresh):
+    -- ask the API what is actually running instead of blindly hiding.
+    if not self.activeCastID then return Refresh(self) end
+    StopCast(self)
   else
     StopCast(self)
   end
@@ -198,6 +217,7 @@ local function Register(f)
   f.Refresh = Refresh
   f:RegisterEvent("UNIT_SPELLCAST_START")
   f:RegisterEvent("UNIT_SPELLCAST_STOP")
+  f:RegisterEvent("UNIT_SPELLCAST_SUCCEEDED")
   f:RegisterEvent("UNIT_SPELLCAST_FAILED")
   f:RegisterEvent("UNIT_SPELLCAST_INTERRUPTED")
   f:RegisterEvent("UNIT_SPELLCAST_DELAYED")

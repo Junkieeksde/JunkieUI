@@ -50,6 +50,11 @@ local GAP = 2                -- space between buttons
 local EDGE = 3               -- distance to the screen edge
 local PAD = 2                -- background plate padding
 local PETSIZE = 27
+-- Horizontal spacing between the vertical right-edge columns. Set to 1 so the
+-- right-edge columns have a 1 pixel gap. The background plates still
+-- bleed their PAD outward and will overlap slightly, but they are the same
+-- color so the overlap is invisible.
+local COLGAP = 1
 local PER_MICRO_ROW = 5
 local MICRO_W, MICRO_H = 29, 36
 
@@ -786,7 +791,7 @@ local function PlaceStanceBar(used, force)
 
   -- Two side columns exist in the "one big stack" layouts, one otherwise.
   local cols = (mode == "triple" or mode == "tripleHigh" or mode == "sebby") and 2 or 1
-  local sx = -EDGE - cols * (BASESIZE + GAP)
+  local sx = -EDGE - cols * (BASESIZE + COLGAP)
   -- Vertically centered on the side bars (their centre sits GAP/2 above RIGHT).
   local barH = max(numForms, 1) * BASESIZE + max(numForms - 1, 0) * GAP
   local topY = GAP / 2 + barH / 2
@@ -920,7 +925,7 @@ local function ApplyLayout()
     PlaceGrid(bar4, J.barHolder, "BOTTOMLEFT", 0, (size + GAP) * 2, 12, size)
     -- Bar 2 becomes a second vertical 12-column directly left of Bar 5.
     local topY = 6 * (BASESIZE + GAP)
-    PlaceGrid(bar2, UIParent, "RIGHT", -EDGE - BASESIZE - GAP, topY, 1, BASESIZE, "down")
+    PlaceGrid(bar2, UIParent, "RIGHT", -EDGE - BASESIZE - COLGAP, topY, 1, BASESIZE, "down")
 
     local pmain = Panel("bottom", J.barHolder)
     pmain:SetPoint("BOTTOMLEFT", J.barHolder, "BOTTOMLEFT", -PAD, -PAD)
@@ -928,7 +933,7 @@ local function ApplyLayout()
     used["bottom"] = true
 
     local p2 = Panel("bar2", UIParent)
-    p2:SetPoint("TOPRIGHT", UIParent, "RIGHT", -EDGE - BASESIZE - GAP + PAD, topY + PAD)
+    p2:SetPoint("TOPRIGHT", UIParent, "RIGHT", -EDGE - BASESIZE - COLGAP + PAD, topY + PAD)
     p2:SetSize(BASESIZE + PAD * 2, 12 * BASESIZE + 11 * GAP + PAD * 2)
     used["bar2"] = true
   else
