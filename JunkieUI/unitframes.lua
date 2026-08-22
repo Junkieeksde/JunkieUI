@@ -1000,3 +1000,136 @@ J:AddModule(function()
   AddHook("PLAYER_ENTERING_WORLD", PetEvent)
   AddHook("PLAYER_REGEN_ENABLED", PetEvent)
 end)
+
+
+-- Ascension resource bars ----------------------------------------------------
+-- The custom client draws its own resource widgets (segment bar, resource bar,
+-- multicast bar and the orb). They are Blizzard-side frames we do not own, so
+-- they are never destroyed or permanently neutered: a single OnShow hook per
+-- frame hides them again while the option is on, and turning the option off
+-- simply shows whatever was visible before. No OnUpdate, no polling.
+local COA_FRAMES = {
+  "CoAResourceSegmentBar",
+  "CoAResourceBar",
+  "CoAMultiCastActionBarFrame",
+  "CoAResourceOrb",
+}
+
+local coaHooked = {}   -- [frameName] = true, OnShow hook installed once
+local coaHidden = {}   -- [frameName] = true, hidden by us (so we only restore those)
+local coaRestore = {}  -- short, self-terminating restore queue
+local coaRestoreDriver = CreateFrame("Frame")
+local COA_RESTORE_WAITS = { 0, 0.20, 0.60 }
+coaRestoreDriver:Hide()
+
+local function RememberCoAHidden(name)
+  if not name then return end
+  coaHidden[name] = true
+  if J.db and J.db.coaHiddenFrames then J.db.coaHiddenFrames[name] = true end
+end
+
+local function QueueCoARestore(name)
+  if name then coaRestore[name] = true end
+  coaRestoreDriver.JUI_elapsed = 0
+  coaRestoreDriver.JUI_step = 0
+  coaRestoreDriver:Show()
+end
+
+-- Ascension can run its own visibility pass immediately after a settings click
+-- or PLAYER_ENTERING_WORLD.  Three sparse retries let that pass finish first.
+-- The driver exists only while restoring and then parks completely.
+coaRestoreDriver:SetScript("OnUpdate", function(self, elapsed)
+  if J.db and J.db.hideCoAResource then self:Hide(); return end
+  self.JUI_elapsed = (self.JUI_elapsed or 0) + elapsed
+  local step = (self.JUI_step or 0) + 1
+  if self.JUI_elapsed < COA_RESTORE_WAITS[step] then return end
+  self.JUI_step = step
+  self.JUI_elapsed = 0
+  for name in pairs(coaRestore) do
+    local f = _G[name]
+    if f and not f:IsShown() then f:Show() end
+  end
+  if step >= #COA_RESTORE_WAITS then
+    self:Hide()
+    for name in pairs(coaRestore) do
+      coaRestore[name] = nil
+      coaHidden[name] = nil
+      if J.db and J.db.coaHiddenFrames then J.db.coaHiddenFrames[name] = nil end
+    end
+    if J.db then J.db.coaWasHidden = nil end
+  end
+end)
+
+local function CoAHide(self)
+  -- Guard: the hook stays installed for the session, so it must be a no-op
+  -- while the option is off.
+  if J.db and J.db.hideCoAResource and self:IsShown() then
+    local name = self:GetName()
+    RememberCoAHidden(name)
+    self:Hide()
+  end
+end
+
+function J:UpdateCoAResourceBars()
+  local hide = J.db and J.db.hideCoAResource
+  -- A one-shot restore: if any earlier pass (or an earlier session) hid these
+  -- widgets, turning the option off shows all of them back, not just the ones
+  -- this session happened to hide itself.
+  local restoreAll = (not hide) and J.db and J.db.coaWasHidden
+  local saved = J.db and J.db.coaHiddenFrames
+  for i = 1, #COA_FRAMES do
+    local name = COA_FRAMES[i]
+    local f = _G[name]
+    if f then
+      if hide then
+        -- The hook is only ever installed once the option is actually turned
+        -- on, so with the option off this module never touches these frames.
+        if not coaHooked[name] and f.HookScript then
+          coaHooked[name] = true
+          f:HookScript("OnShow", CoAHide)
+        end
+        if f:IsShown() then
+          RememberCoAHidden(name)
+          f:Hide()
+        end
+      elseif coaHidden[name] or (saved and saved[name]) or restoreAll then
+        QueueCoARestore(name)
+        if not f:IsShown() then f:Show() end
+      end
+    end
+  end
+  if J.db then
+    if hide then J.db.coaWasHidden = true end
+  end
+end
+
+-- Read-only diagnostic for "/jui coa".
+function J:ReportCoAResourceBars()
+  print("|cff4fc3f7JunkieUI|r CoA resource widgets (option "
+    .. ((J.db and J.db.hideCoAResource) and "ON" or "OFF") .. "):")
+  for i = 1, #COA_FRAMES do
+    local name = COA_FRAMES[i]
+    local f = _G[name]
+    if not f then
+      print("  " .. name .. ": |cff888888does not exist|r")
+    else
+      local p = f.GetParent and f:GetParent()
+      local pname = (p and p.GetName and p:GetName()) or "?"
+      print(string.format("  %s: shown=%s visible=%s alpha=%.2f parent=%s hookedByUs=%s restorePending=%s",
+        name, tostring(f:IsShown()), tostring(f:IsVisible()),
+        (f.GetAlpha and f:GetAlpha()) or 1, pname, tostring(coaHooked[name] or false),
+        tostring(coaRestore[name] or false)))
+    end
+  end
+end
+
+
+
+J:AddModule(function()
+  J:UpdateCoAResourceBars()
+  -- Some of these widgets are created (or re-shown) after login and on every
+  -- world load, so the state is re-applied on those events only.
+  local coa = CreateFrame("Frame")
+  coa:RegisterEvent("PLAYER_ENTERING_WORLD")
+  coa:SetScript("OnEvent", function() J:UpdateCoAResourceBars() end)
+end)

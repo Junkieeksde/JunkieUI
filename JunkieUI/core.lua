@@ -28,6 +28,10 @@ J.defaults = {
 
   unitGap = 250,          -- pixels between player and target frame (1..500)
   unitY = -180,           -- shared Y offset from center
+  hideCoAResource = false, -- hide Ascension's own resource bars / orb
+  coaWasHidden = false,   -- bookkeeping: the option hid them at least once
+  coaHiddenFrames = {},   -- exact Ascension widgets hidden by this option
+
   playerPower = true,     -- show player power bar
   targetPower = true,     -- show target power bar
   targetAuraText = true,  -- cooldown text on target buffs/debuffs

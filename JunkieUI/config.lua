@@ -507,6 +507,15 @@ local function BuildPanel()
   MakeCheck(u, "Show timers on target buffs and debuffs", y, J.db.targetAuraText, function(v)
     J.db.targetAuraText = v
   end)
+  y = y - 24
+
+  MakeCheck(u, "Disable Ascension Resource bars", y, J.db.hideCoAResource, function(v)
+    local old = J.db.hideCoAResource
+    J.db.hideCoAResource = v
+    if old ~= v then
+      ReloadUI()
+    end
+  end)
   y = y - 40
 
 
@@ -1022,7 +1031,17 @@ function J:OpenCooldownManager()
 end
 
 SLASH_JUNKIEUI1 = "/jui"
-SlashCmdList["JUNKIEUI"] = function() J:ToggleConfig() end
+SlashCmdList["JUNKIEUI"] = function(msg)
+  msg = (msg or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
+  -- "/jui coa" is a read-only report: which Ascension resource widgets exist,
+  -- whether they are shown, and who their parent is. Nothing is changed.
+  if msg == "coa" then
+    if J.ReportCoAResourceBars then J:ReportCoAResourceBars() end
+    return
+  end
+  J:ToggleConfig()
+end
+
 
 
 

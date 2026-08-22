@@ -496,6 +496,113 @@ local function SkinAll()
   end
 end
 
+
+-- Range check ----------------------------------------------------------------
+-- Blizzard's own range timer does not drive every bar on this client (the main
+-- bar in particular repaints only when an action happens), so the tint is owned
+-- here instead: one 5Hz ticker, parked whenever there is no target, and the
+-- icon is only touched when the range flag actually flips.
+-- IsActionInRange returns 0 both when the target is too far away and when it
+-- is inside a spell's minimum range (deadzone), which is exactly the two cases
+-- the icon should read as red.
+local RANGE_R, RANGE_G, RANGE_B = 1, 0.25, 0.25
+local rangeButtons = nil
+
+local function ButtonIcon(b)
+  local icon = b.JUI_icon
+  if not icon then
+    local name = b:GetName()
+    icon = name and _G[name .. "Icon"]
+    b.JUI_icon = icon
+  end
+  return icon
+end
+
+local function RangeList()
+  if rangeButtons then return rangeButtons end
+  rangeButtons = {}
+  for _, prefix in ipairs(BAR_PREFIXES) do
+    for i = 1, 12 do
+      local b = _G[prefix .. i]
+      if b then
+        b.JUI_ranged = true          -- marks the buttons this module owns
+        rangeButtons[#rangeButtons + 1] = b
+      end
+    end
+  end
+  return rangeButtons
+end
+
+local function ApplyRangeTint(b, oor)
+  local icon = ButtonIcon(b)
+  if not icon then return end
+  if oor then
+    icon:SetVertexColor(RANGE_R, RANGE_G, RANGE_B)
+  elseif ActionButton_UpdateUsable then
+    -- Hand the colour back to Blizzard so usable/unusable/mana stays correct.
+    ActionButton_UpdateUsable(b)
+  else
+    icon:SetVertexColor(1, 1, 1)
+  end
+end
+
+-- Blizzard repaints the icon on its own (usable, mana, action change) and would
+-- wipe the red. This hook only re-applies the cached flag: no API call, and it
+-- never touches buttons this module does not own.
+local function UpdateRangeTint(self)
+  if not self or not self.JUI_ranged or not self.JUI_oor then return end
+  local icon = ButtonIcon(self)
+  if icon then icon:SetVertexColor(RANGE_R, RANGE_G, RANGE_B) end
+end
+
+local function ClearRangeTints()
+  local list = RangeList()
+  for i = 1, #list do
+    local b = list[i]
+    if b.JUI_oor then
+      b.JUI_oor = nil
+      ApplyRangeTint(b, false)
+    end
+  end
+end
+
+local rangeTicker = CreateFrame("Frame")
+rangeTicker:Hide()
+rangeTicker.elapsed = 0
+rangeTicker:SetScript("OnUpdate", function(self, elapsed)
+  self.elapsed = self.elapsed + elapsed
+  if self.elapsed < 0.2 then return end
+  self.elapsed = 0
+  if not UnitExists("target") then
+    ClearRangeTints()
+    self:Hide()
+    return
+  end
+  local list = RangeList()
+  for i = 1, #list do
+    local b = list[i]
+    local action = b.action
+    if action and b:IsShown() then
+      local oor = (IsActionInRange(action) == 0) or false
+      if oor ~= (b.JUI_oor or false) then
+        b.JUI_oor = oor or nil
+        ApplyRangeTint(b, oor)
+      end
+    end
+  end
+end)
+
+local function RefreshRangeAll()
+  if UnitExists("target") then
+    rangeTicker.elapsed = 1
+    rangeTicker:Show()
+  else
+    ClearRangeTints()
+    rangeTicker:Hide()
+  end
+end
+
+
 -- Persistent slot art. Blizzard hides empty secure buttons in several states
 -- (and their skin backdrop goes with them), so the visible frame/background of
 -- a slot lives in its own mouse-transparent frame that this module owns.
@@ -780,14 +887,40 @@ end
 -- Vertical column flush against the right side bars. Blizzard calls
 -- ShapeshiftBar_Update very often (form, usable and cooldown updates), so the
 -- placement work is skipped unless the mode or the number of forms changed.
+-- Entering combat makes the client re-run its own stance bar layout, and on this
+-- client that pass can leave a scale on ShapeshiftBarFrame. The buttons are its
+-- children, so a stray scale is exactly what makes the whole column balloon.
+-- Scale/alpha are not protected calls, so this stays safe inside lockdown.
+local function NormalizeStanceFrame()
+  local f = ShapeshiftBarFrame
+  if not f then return end
+  if f.GetScale and f:GetScale() ~= 1 then f:SetScale(1) end
+  for i = 1, 10 do
+    local b = _G["ShapeshiftButton" .. i]
+    if b and b.GetScale and b:GetScale() ~= 1 then b:SetScale(1) end
+  end
+end
+
 local function PlaceStanceBar(used, force)
-  if InCombatLockdown and InCombatLockdown() then return false end
+  if InCombatLockdown and InCombatLockdown() then
+    -- Secure buttons cannot be re-anchored while locked down, so the geometry
+    -- pass is deferred to PLAYER_REGEN_ENABLED. The scale fix above still runs,
+    -- which is what keeps the bar from blowing up mid-fight.
+    NormalizeStanceFrame()
+    state.stancePending = true
+    state.stanceSig = nil
+    return false
+  end
+  NormalizeStanceFrame()
+
 
   local numForms = (GetNumShapeshiftForms and GetNumShapeshiftForms()) or 0
   local mode = J.db and J.db.barLayout
   local sig = tostring(mode) .. ":" .. numForms
   if not force and not used and sig == state.stanceSig then return false end
   state.stanceSig = sig
+  state.stancePending = false
+
 
   -- Two side columns exist in the "one big stack" layouts, one otherwise.
   local cols = (mode == "triple" or mode == "tripleHigh" or mode == "sebby") and 2 or 1
@@ -1257,16 +1390,28 @@ J:AddModule(function()
     if event == "UNIT_PET" and unit ~= "player" and unit ~= "pet" then return end
     if state.layoutPending then ApplyLayout() end
     if event == "PLAYER_ENTERING_WORLD" then StripBlizzardArt() end
+    -- A stance pass deferred by combat is redone here, forced, so the bar never
+    -- stays in Blizzard's own (over-sized) placement after a fight.
+    if state.stancePending and J.db and J.db.stanceBar then PlaceStanceBar(nil, true) end
     -- Blizzard re-anchors the pet buttons when a pet is summoned or the bar
     -- refreshes, so the row is re-placed on those events as well.
     PlacePetBar()
   end)
+
 
   if hooksecurefunc then
     -- ActionButton_ShowGrid/HideGrid both call ActionButton_Update themselves,
     -- so this single hook covers action, page and grid changes without
     -- skinning every button twice on the first drag of a session.
     hooksecurefunc("ActionButton_Update", SkinButton)
+    -- Range tint: piggybacks on Blizzard's own usable refresh (see above).
+    if ActionButton_UpdateUsable then
+      hooksecurefunc("ActionButton_UpdateUsable", UpdateRangeTint)
+      local rangeEvents = CreateFrame("Frame")
+      rangeEvents:RegisterEvent("PLAYER_TARGET_CHANGED")
+      rangeEvents:RegisterEvent("PLAYER_ENTERING_WORLD")
+      rangeEvents:SetScript("OnEvent", RefreshRangeAll)
+    end
     if ShapeshiftBar_Update then
       hooksecurefunc("ShapeshiftBar_Update", function()
         if J.db and J.db.stanceBar then PlaceStanceBar() end
