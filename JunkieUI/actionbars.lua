@@ -901,6 +901,26 @@ local function NormalizeStanceFrame()
   end
 end
 
+-- Cheap fingerprint of the anchor the bar currently carries. Blizzard's own
+-- login pass (and UIParent_ManageFramePositions) can re-anchor or re-scale the
+-- column after we placed it; a mode/form-count signature alone cannot see that,
+-- which is why the bar stayed wrong until the options panel forced a pass.
+-- GetPoint/GetScale return stored values (no layout resolution, no screen
+-- coordinate rounding), so the fingerprint is deterministic: right after our
+-- own placement it always matches, which rules out repeated relayouts.
+local function StanceGeomSig()
+  local b = _G["ShapeshiftButton1"]
+  if not b or not b.GetPoint then return "-" end
+  local p, rel, rp, x, y = b:GetPoint(1)
+  local relName = (rel and rel.GetName and rel:GetName()) or "?"
+  local s = (b.GetScale and b:GetScale()) or 1
+  local fs = (ShapeshiftBarFrame and ShapeshiftBarFrame.GetScale
+    and ShapeshiftBarFrame:GetScale()) or 1
+  return tostring(p) .. ":" .. relName .. ":" .. tostring(rp) .. ":"
+    .. tostring(x and floor(x + 0.5)) .. ":" .. tostring(y and floor(y + 0.5))
+    .. ":" .. tostring(s) .. ":" .. tostring(fs)
+end
+
 local function PlaceStanceBar(used, force)
   if InCombatLockdown and InCombatLockdown() then
     -- Secure buttons cannot be re-anchored while locked down, so the geometry
@@ -916,9 +936,8 @@ local function PlaceStanceBar(used, force)
 
   local numForms = (GetNumShapeshiftForms and GetNumShapeshiftForms()) or 0
   local mode = J.db and J.db.barLayout
-  local sig = tostring(mode) .. ":" .. numForms
+  local sig = tostring(mode) .. ":" .. numForms .. ":" .. StanceGeomSig()
   if not force and not used and sig == state.stanceSig then return false end
-  state.stanceSig = sig
   state.stancePending = false
 
 
@@ -963,9 +982,50 @@ local function PlaceStanceBar(used, force)
     if panel then panel:Hide() end
     if used then used["stance"] = false end
   end
+  -- Recorded after the placement so the fingerprint describes our own final
+  -- geometry. Any later foreign move/scale changes it and unlocks one pass.
+  state.stanceSig = tostring(mode) .. ":" .. numForms .. ":" .. StanceGeomSig()
   return true
 end
 J.PlaceStanceBar = PlaceStanceBar
+
+-- Login settle pass. At login the client finishes its own stance/bonus-bar
+-- layout after our modules have run, so a single placement at PLAYER_LOGIN can
+-- be overwritten. This driver re-checks a handful of times over the first few
+-- seconds and then hides itself for good: no OnUpdate remains during play, and
+-- each check is a signature compare that only re-places when something drifted.
+local STANCE_SETTLE = { 0.1, 0.4, 1.0, 2.0, 4.0 }
+local stanceSettle
+local function StartStanceSettle()
+  if not (J.db and J.db.stanceBar) then return end
+  if not stanceSettle then
+    stanceSettle = CreateFrame("Frame")
+    stanceSettle:Hide()
+    stanceSettle:SetScript("OnUpdate", function(self, elapsed)
+      self.t = (self.t or 0) + elapsed
+      local step = STANCE_SETTLE[self.i or 1]
+      if not step then self:Hide() return end
+      if self.t < step then return end
+      self.i = (self.i or 1) + 1
+      if InCombatLockdown and InCombatLockdown() then
+        -- Placement is unsafe in lockdown; PLAYER_REGEN_ENABLED redoes it.
+        state.stancePending = true
+        self:Hide()
+        return
+      end
+      -- The toggle may have been switched off while the pass was running; the
+      -- parked bar must never be dragged back onto the screen.
+      if not (J.db and J.db.stanceBar) then self:Hide() return end
+      PlaceStanceBar(nil, false)
+      if not STANCE_SETTLE[self.i] then self:Hide() end
+    end)
+  end
+  stanceSettle.t = 0
+  stanceSettle.i = 1
+  stanceSettle:Show()
+end
+J.StartStanceSettle = StartStanceSettle
+
 
 -- 10 -- Pet bar ---------------------------------------------------------------
 -- PetActionBarFrame is a sliding bar that re-points itself while it animates,
@@ -1389,7 +1449,12 @@ J:AddModule(function()
     -- the pet bar, so everyone else's summons are dropped immediately.
     if event == "UNIT_PET" and unit ~= "player" and unit ~= "pet" then return end
     if state.layoutPending then ApplyLayout() end
-    if event == "PLAYER_ENTERING_WORLD" then StripBlizzardArt() end
+    if event == "PLAYER_ENTERING_WORLD" then
+      StripBlizzardArt()
+      -- Short, self-terminating re-check so the stance column ends up correct
+      -- straight after login instead of only after opening the options panel.
+      StartStanceSettle()
+    end
     -- A stance pass deferred by combat is redone here, forced, so the bar never
     -- stays in Blizzard's own (over-sized) placement after a fight.
     if state.stancePending and J.db and J.db.stanceBar then PlaceStanceBar(nil, true) end
