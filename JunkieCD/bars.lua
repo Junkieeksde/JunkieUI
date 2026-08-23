@@ -35,6 +35,9 @@ local timedIcons = setmetatable({}, { __mode = "k" })
 -- Filled in once the frames exist: { main.icons, sub.icons, upBar.icons, downBar.icons }.
 local iconLists = {}
 local FindAura
+-- Forward declarations: the rebuild pass above uses these before the file
+-- defines them further down.
+local GlowAuraActive, FindGlowAura
 local UpdateRangeTicker
 local actionSlotsByID, actionSlotsByName = {}, {}
 local auraCache = { player = {}, target = {}, pet = {} }
@@ -639,7 +642,7 @@ function C:Rebuild()
   local auraDriven = false
   for k = 1, 4 do
     for _, e in ipairs(set[SET_KEYS[k]] or {}) do
-      if (e.replaceEnabled and e.replaceTriggerID) or (e.glowAuraEnabled and e.glowAuraID) or e.stacksEnabled then
+      if (e.replaceEnabled and e.replaceTriggerID) or (e.glowAuraEnabled and GlowAuraActive(e)) or e.stacksEnabled then
         auraDriven = true
         break
       end
@@ -877,6 +880,32 @@ end
 
 
 
+-- The cooldown glow can watch several aura IDs and, optionally, only fire once
+-- one of them is stacked high enough. The first ID that satisfies the rule
+-- wins, so the loop bails as early as possible.
+local glowIDScratch = {}
+GlowAuraActive = function(entry)
+  if tonumber(entry.glowAuraID) then return true end
+  for i = 2, C.MAX_AURA_IDS do
+    if tonumber(entry[C.GLOW_AURA_ID_FIELDS[i]]) then return true end
+  end
+  return false
+end
+
+FindGlowAura = function(unit, filter, entry)
+  if not FindAura then return false end
+  local need = (entry.glowAuraStacksEnabled and math.max(1, tonumber(entry.glowAuraStacks) or 1)) or nil
+  local ids = C:GlowAuraIDs(entry, glowIDScratch)
+  for i = 1, #ids do
+    local tex, count = FindAura(unit, filter, ids[i], true)
+    if tex then
+      if not need then return true end
+      if (tonumber(count) or 0) >= need then return true end
+    end
+  end
+  return false
+end
+
 local function UpdateCDIcon(f, profile)
   local entry = f.entry
   if not entry or not entry.id then
@@ -1037,10 +1066,10 @@ local function UpdateCDIcon(f, profile)
   if shownEntry ~= entry and entry.replaceGlow and entry.replaceGlow ~= "none" then
     glow, kind = true, entry.replaceGlow
   end
-  if entry.glowAuraEnabled and entry.glowAuraID then
+  if entry.glowAuraEnabled and GlowAuraActive(entry) then
     local unit = entry.glowAuraUnit or "player"
     local filter = entry.glowAuraFilter == "debuff" and "HARMFUL" or "HELPFUL"
-    local found = FindAura(unit, filter, entry.glowAuraID, true) and true or false
+    local found = FindGlowAura(unit, filter, entry)
     -- The sound only fires on the edge: the moment the aura appears.
     if found and not f.auraSoundOn then C:PlayAlert(entry.glowAuraSound) end
     f.auraSoundOn = found

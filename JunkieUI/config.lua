@@ -563,6 +563,15 @@ local function BuildPanel()
   end)
 
   y = y - 24
+  MakeCheck(a, "Trigger actions on key press (down) instead of release", y, J.db.keyPressDown, function(v)
+    local old = J.db.keyPressDown
+    J.db.keyPressDown = v
+    -- Click registration is protected, so the switch is applied through a
+    -- clean reload instead of poking secure buttons mid-session.
+    if old ~= v then ReloadUI() end
+  end)
+
+  y = y - 24
   MakeCheck(a, "Show the stance / form bar", y, J.db.stanceBar, function(v)
     J.db.stanceBar = v
     if J.ApplyBarLayout then J.ApplyBarLayout() end

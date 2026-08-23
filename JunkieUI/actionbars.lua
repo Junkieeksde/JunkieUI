@@ -497,6 +497,38 @@ local function SkinAll()
 end
 
 
+-- Key press down ---------------------------------------------------------------
+-- "Cast on key down" is two separate switches on this client: the CVar drives
+-- keybinds (Blizzard's ActionButton_Down path) and RegisterForClicks drives
+-- actual mouse clicks. Both are set once, at login, and after the forced reload
+-- the settings toggle triggers -- nothing here runs per frame.
+-- RegisterForClicks is protected on action buttons, so the pass bails in
+-- combat; a change can only reach it through a reload anyway.
+local KEYDOWN_EXTRA_PREFIXES = { "ShapeshiftButton", "PetActionButton" }
+
+local function ApplyKeyPressDown()
+  if InCombatLockdown and InCombatLockdown() then return end
+  local on = (J.db and J.db.keyPressDown) and true or false
+  if type(SetCVar) == "function" then
+    pcall(SetCVar, "ActionButtonUseKeyDown", on and "1" or "0")
+  end
+  local clicks = on and "AnyDown" or "AnyUp"
+  for _, prefix in ipairs(BAR_PREFIXES) do
+    for i = 1, 12 do
+      local b = _G[prefix .. i]
+      if b and b.RegisterForClicks then b:RegisterForClicks(clicks) end
+    end
+  end
+  for _, prefix in ipairs(KEYDOWN_EXTRA_PREFIXES) do
+    for i = 1, 12 do
+      local b = _G[prefix .. i]
+      if b and b.RegisterForClicks then b:RegisterForClicks(clicks) end
+    end
+  end
+end
+J.ApplyKeyPressDown = ApplyKeyPressDown
+
+
 -- Range check ----------------------------------------------------------------
 -- Blizzard's own range timer does not drive every bar on this client (the main
 -- bar in particular repaints only when an action happens), so the tint is owned
@@ -1486,6 +1518,7 @@ J:AddModule(function()
 
   J.ApplyCooldownText()
   J.ApplyMacroText()
+  ApplyKeyPressDown()
 end)
 
 -- Totem bar anchor: optional mover + show/hide toggle (mirrors the quest

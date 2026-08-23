@@ -5,7 +5,7 @@ local ADDON = ...
 JunkieUI = CreateFrame("Frame", "JunkieUIFrame", UIParent)
 local J = JunkieUI
 
-J.version = "2.5.1"
+J.version = "2.5.2"
 J.modules = {}
 
 -- Colors -------------------------------------------------------------------
@@ -19,6 +19,7 @@ J.defaults = {
   barTexture = "Flat",    -- statusbar texture name (media.lua / LibSharedMedia)
   cooldownText = true,
   macroText = false,      -- show macro names on action buttons
+  keyPressDown = false,   -- trigger action buttons on key/mouse down instead of up
   barLayout = "one",      -- one | three | triple | tripleHigh | sebby
   barBackground = true,   -- background plates behind the action bars
   stanceBar = false,      -- show the stance / shapeshift bar (top left)

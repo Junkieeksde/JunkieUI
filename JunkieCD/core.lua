@@ -8,7 +8,7 @@ local ADDON = ...
 JunkieCD = CreateFrame("Frame", "JunkieCDFrame", UIParent)
 local C = JunkieCD
 
-C.version = "2.5.1"
+C.version = "2.5.2"
 C.modules = {}
 
 -- Shared JunkieUI palette ---------------------------------------------------
@@ -50,6 +50,23 @@ end
 -- reacts as soon as one of them matches.
 local AURA_ID_FIELDS = {}
 for i = 2, C.MAX_AURA_IDS do AURA_ID_FIELDS[i] = "id" .. i end
+-- Same idea for the cooldown "glow when an aura is up" condition, which keeps
+-- its ids under their own keys so an icon can be both a cooldown and watch a
+-- handful of auras without the two lists ever mixing.
+local GLOW_AURA_ID_FIELDS = {}
+for i = 2, C.MAX_AURA_IDS do GLOW_AURA_ID_FIELDS[i] = "glowAuraID" .. i end
+C.GLOW_AURA_ID_FIELDS = GLOW_AURA_ID_FIELDS
+function C:GlowAuraIDs(entry, out)
+  out = out or {}
+  for i = #out, 1, -1 do out[i] = nil end
+  if not entry then return out end
+  if tonumber(entry.glowAuraID) then out[#out + 1] = tonumber(entry.glowAuraID) end
+  for i = 2, C.MAX_AURA_IDS do
+    local extra = tonumber(entry[GLOW_AURA_ID_FIELDS[i]])
+    if extra then out[#out + 1] = extra end
+  end
+  return out
+end
 function C:AuraIDs(entry, out)
   out = out or {}
   for i = #out, 1, -1 do out[i] = nil end
@@ -885,6 +902,12 @@ local function RepairIcons(list, max, seenTables, seenUIDs)
       for n = 2, C.MAX_AURA_IDS do
         local key = "id" .. n
         if e[key] ~= nil then e[key] = tonumber(e[key]) end
+        local gkey = "glowAuraID" .. n
+        if e[gkey] ~= nil then e[gkey] = tonumber(e[gkey]) end
+      end
+      if e.glowAuraID ~= nil then e.glowAuraID = tonumber(e.glowAuraID) end
+      if e.glowAuraStacks ~= nil then
+        e.glowAuraStacks = math.max(1, math.min(99, tonumber(e.glowAuraStacks) or 1))
       end
       if e.expireWarnAt ~= nil then e.expireWarnAt = math.max(1, math.min(600, tonumber(e.expireWarnAt) or 60)) end
       if type(e.sound) ~= "string" then e.sound = e.sound and tostring(e.sound) or nil end

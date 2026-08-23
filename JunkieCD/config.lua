@@ -744,6 +744,27 @@ local function BuildIconPopup()
     function() return get("glowAuraFilter", "buff") end,
     function(key) set("glowAuraFilter", key) end, 250, 12)
 
+  local glowStackCheck = MakeCheck(f, "Glow at a number of stacks", -40,
+    function() return get("glowAuraStacksEnabled", false) end,
+    function(v)
+      local e = PopupEntry(f)
+      if e and not v then e.glowAuraStacks = 1 end
+      set("glowAuraStacksEnabled", v)
+    end, 12)
+
+  local glowStackField = MakeField(f, "Glow from this many stacks and up", -40, 12, 70,
+    function() return get("glowAuraStacks", 1) end,
+    function(v) set("glowAuraStacks", math.max(1, math.min(99, tonumber(v) or 1))) end, 2)
+
+  -- The cooldown glow can watch several auras as well: any match lights it up.
+  local glowExtraFields = {}
+  for i = 2, C.MAX_AURA_IDS do
+    local key = "glowAuraID" .. i
+    glowExtraFields[i] = MakeField(f, "Extra glow aura ID " .. i .. " (any of them counts)", -40, 12, 120,
+      function() return get(key) end,
+      function(v) set(key, (v and v > 0) and v or nil) end)
+  end
+
   local glowSoundDrop = MakeDropdown(f, "Sound when that aura appears", -40, SOUND_OPTIONS,
     function() return get("glowAuraSound", "none") end,
     function(key)
@@ -836,8 +857,10 @@ local function BuildIconPopup()
         { replaceGlowDrop, false }, { chargeCheck, false },
         { glowCheck, false }, { glowField, false },
         { glowStyleDrop, false }, { glowUnitDrop, false }, { glowFilterDrop, false },
+        { glowStackCheck, false }, { glowStackField, false },
         { glowSoundDrop, false },
       }
+      for i = 2, C.MAX_AURA_IDS do tail[#tail + 1] = { glowExtraFields[i], false } end
       endY = Reflow(endY, tail)
       -- Per icon, never shared: rehydrate the tick from this uid's own value.
       onlyMineCheck:Refresh()
@@ -862,6 +885,8 @@ local function BuildIconPopup()
         { glowStyleDrop, glowOn },
         { glowUnitDrop, glowOn },
         { glowFilterDrop, glowOn },
+        { glowStackCheck, glowOn },
+        { glowStackField, glowOn and (e.glowAuraStacksEnabled and true or false) },
         { glowSoundDrop, glowOn },
         -- aura-only blocks stay parked
         { glowDrop, false }, { unitDrop, false }, { filterDrop, false },
@@ -871,7 +896,20 @@ local function BuildIconPopup()
         { expireCheck, false }, { expireField, false },
       }
       for i = 2, C.MAX_AURA_IDS do parked[#parked + 1] = { extraFields[i], false } end
+      -- The extra glow IDs belong directly under the main one, so they are
+      -- spliced in there instead of trailing the whole block.
+      for i = C.MAX_AURA_IDS, 2, -1 do
+        for n = 1, #parked do
+          if parked[n][1] == glowField then
+            table.insert(parked, n + 1, { glowExtraFields[i], glowOn })
+            break
+          end
+        end
+      end
       endY = Reflow(-40, parked)
+      glowStackCheck:Refresh()
+      glowStackField:Sync()
+      for i = 2, C.MAX_AURA_IDS do glowExtraFields[i]:Sync() end
       equippedCheck:Refresh()
       replaceCheck:Refresh()
       chargeCheck:Refresh()
