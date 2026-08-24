@@ -1,4 +1,4 @@
--- /jui settings panel (flat AtlasLoot-inspired theme)
+-- /jui settings panel (flat dark theme)
 local J = JunkieUI
 
 local panel

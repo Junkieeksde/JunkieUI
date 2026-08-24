@@ -13,7 +13,7 @@ Plug and play. No profiles.
   - Bottom plate top to bottom: Bar4 (6x2), Bar1 (12), Bar3 (12), Bar2 (6x2)
   - Right side: Bar5, 12 buttons downward
   - Bar1 paging: `[stealth] 8; [stance:1] 7; [stance:2] 9; [stance:3] 10; [stance:4] 10`
-- Unit frames 250x40 (ElvUI-flat) with target castbar and target auras
+- Unit frames 250x40 (flat style) with target castbar and target auras
 - Player debuffs anchored right to left, 200px above the player frame
 - Chat in a dark box with the edit box directly below the chat
 

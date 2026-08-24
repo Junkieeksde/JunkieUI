@@ -1657,7 +1657,7 @@ local function BuildPanel(host)
     local h = math.floor(PREVIEW_H / (target / parentScale) + 0.5)
     content:SetSize(w, h)
     local offX = math.floor((width - w * (target / parentScale)) / 2 + 0.5)
-    local offY = math.floor(PREVIEW_H * 0.10 + 0.5)
+    local offY = math.floor(PREVIEW_H * 0.10 + 0.5) - 20
     content:ClearAllPoints()
     content:SetPoint("TOPLEFT", preview, "TOPLEFT", offX, -offY)
   end
