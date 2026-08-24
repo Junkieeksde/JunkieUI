@@ -2683,6 +2683,10 @@ local function BuildPanel(host)
   local comboField = MakeField(po, "Aura ID to count stacks from", y, 16, 120,
     function() return BarCfg().spellID end,
     function(v) BarCfg().spellID = (v and v > 0) and v or nil; C:Rebuild() end)
+  local comboTypeDrop = MakeDropdown(po, "Aura type", y,
+    { { key = "HELPFUL", name = "Buff" }, { key = "HARMFUL", name = "Debuff" } },
+    function() return BarCfg().comboAuraType or "HELPFUL" end,
+    function(key) BarCfg().comboAuraType = key; C:Rebuild() end, 240)
   local comboTargetCheck = MakeCheck(po, "Read the aura on the target instead of on you", y,
     function() return BarCfg().onTarget end,
     function(v) BarCfg().onTarget = v and true or false; C:Rebuild() end)
@@ -2791,6 +2795,7 @@ local function BuildPanel(host)
       { comboSlider, on and isCombo },
       { comboIDCheck, on and isCombo },
       { comboField, on and isCombo and (cfg.useAura and true or false) },
+      { comboTypeDrop, on and isCombo and (cfg.useAura and true or false) },
       { comboTargetCheck, on and isCombo and (cfg.useAura and true or false) },
       { comboChargeCheck, on and isCombo },
       { comboChargeField, on and isCombo and (cfg.useCharges and true or false) },

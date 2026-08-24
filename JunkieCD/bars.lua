@@ -1548,12 +1548,9 @@ local function UpdateComboSlot(slot)
   elseif cp.spellID then
     -- "Read on target" moves the stack lookup to the current target.
     local unit = cp.onTarget and "target" or "player"
-    local filter = cp.onTarget and "HARMFUL" or "HELPFUL"
+    -- Buff / debuff is an explicit choice, exactly like the resource bar.
+    local filter = (cp.comboAuraType == "HARMFUL") and "HARMFUL" or "HELPFUL"
     local _, count = FindAura(unit, filter, cp.spellID)
-    if not count and cp.onTarget then
-      local _, other = FindAura(unit, "HELPFUL", cp.spellID)
-      count = other
-    end
     value = count or 0
   else
     value = GetComboPoints("player", "target") or 0

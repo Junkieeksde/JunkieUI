@@ -186,6 +186,7 @@ function C:NewBar(kind)
     useCharges = false,              -- count charges of a spell instead
     chargeSpellID = nil,
     onTarget = false,                -- read the aura on the target, not the player
+    comboAuraType = nil,             -- HELPFUL = buff, HARMFUL = debuff (nil = legacy)
     classColor = false,
     color = { C.ACCENT[1], C.ACCENT[2], C.ACCENT[3] },
   }
@@ -240,6 +241,9 @@ function C:MigrateBars(set, combo)
       b.height = tonumber(combo.height) or 15
       b.useAura = combo.useAura and true or false
       b.spellID = tonumber(combo.spellID)
+      if combo.comboAuraType == "HARMFUL" or combo.comboAuraType == "HELPFUL" then
+        b.comboAuraType = combo.comboAuraType
+      end
       b.useCharges = combo.useCharges and true or false
       b.chargeSpellID = tonumber(combo.chargeSpellID)
       b.classColor = combo.classColor and true or false
@@ -261,6 +265,12 @@ function C:MigrateBars(set, combo)
     b.count = math.max(1, math.min(20, tonumber(b.count) or 5))
     b.spellID = tonumber(b.spellID)
     b.chargeSpellID = tonumber(b.chargeSpellID)
+    -- Combo aura filter. Profiles written before this option existed inferred
+    -- the filter from "read on target" (target = debuff, player = buff), so the
+    -- old behaviour is written out once and stays stable from then on.
+    if b.comboAuraType ~= "HELPFUL" and b.comboAuraType ~= "HARMFUL" then
+      b.comboAuraType = b.onTarget and "HARMFUL" or "HELPFUL"
+    end
     if type(b.color) ~= "table" then b.color = { C.ACCENT[1], C.ACCENT[2], C.ACCENT[3] } end
   end
   for i = C.MAX_BARS + 1, #set.bars do set.bars[i] = nil end
