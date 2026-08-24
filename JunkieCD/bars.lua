@@ -1092,12 +1092,19 @@ end
 -- The 5Hz poll only has to answer one question: did this icon move in or out
 -- of range? Repainting the whole icon every tick is wasted work, so we compare
 -- the range flag first and only rebuild when it flipped.
+local rangeMemo = {}
 local function RangeSweep(list)
   for i = 1, #list do
     local f = list[i]
     local name = f.jcdSpellName
     if name and f:IsShown() then
-      local inRange = IsSpellInRange(name, "target") ~= 0
+      -- The same spell can sit on several icons (duplicates, second bar). One
+      -- API call per distinct name per sweep instead of one per icon.
+      local inRange = rangeMemo[name]
+      if inRange == nil then
+        inRange = IsSpellInRange(name, "target") ~= 0
+        rangeMemo[name] = inRange
+      end
       if inRange ~= f.jcdInRange then
         f.jcdInRange = inRange
         -- Range only ever drives the icon tint; rebuilding the whole icon here
@@ -1159,6 +1166,7 @@ rangeTicker:SetScript("OnUpdate", function(self, elapsed)
   if self.elapsed < 0.2 then return end
   self.elapsed = 0
   if not UnitExists("target") then self:Hide(); return end
+  for k in pairs(rangeMemo) do rangeMemo[k] = nil end
   for l = 1, #iconLists do RangeSweep(iconLists[l]) end
 end)
 

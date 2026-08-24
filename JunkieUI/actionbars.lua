@@ -614,12 +614,20 @@ rangeTicker:SetScript("OnUpdate", function(self, elapsed)
   for i = 1, #list do
     local b = list[i]
     local action = b.action
-    if action and b:IsShown() then
+    -- IsVisible() (not IsShown) skips every button on a bar that is hidden as
+    -- a whole, and HasAction skips empty slots: both are cheap local checks
+    -- that keep IsActionInRange off the buttons that could never tint anyway.
+    if action and b:IsVisible() and HasAction(action) then
       local oor = (IsActionInRange(action) == 0) or false
       if oor ~= (b.JUI_oor or false) then
         b.JUI_oor = oor or nil
         ApplyRangeTint(b, oor)
       end
+    elseif b.JUI_oor then
+      -- Slot went empty or its bar was hidden while tinted: drop the flag so a
+      -- later action in that slot starts from a clean colour.
+      b.JUI_oor = nil
+      ApplyRangeTint(b, false)
     end
   end
 end)

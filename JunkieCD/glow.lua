@@ -88,16 +88,24 @@ local function ProcUpdate(self, elapsed)
     local t = self.lines[i]
     local d = self.offset + (i - 1) * perim / PROC_SEGMENTS
     local x, y, axis = PointOn(w, h, d, inset)
+    local sw, sh
     if axis == "H" then
       local lineLength = math.min(len, iw)
       x = math.max(inset + lineLength * 0.5, math.min(x, w - inset - lineLength * 0.5))
-      t:SetSize(lineLength, thickness)
+      sw, sh = lineLength, thickness
     else
       local lineLength = math.min(len, ih)
       y = math.max(inset + lineLength * 0.5, math.min(y, h - inset - lineLength * 0.5))
-      t:SetSize(thickness, lineLength)
+      sw, sh = thickness, lineLength
     end
-    t:ClearAllPoints()
+    -- Size only changes when the icon is resized or the segment turns a
+    -- corner; skipping the identical SetSize avoids a needless relayout.
+    if t.jcdW ~= sw or t.jcdH ~= sh then
+      t.jcdW, t.jcdH = sw, sh
+      t:SetSize(sw, sh)
+    end
+    -- The anchor never changes, only its offset: SetPoint alone replaces the
+    -- ClearAllPoints + SetPoint pair.
     t:SetPoint("CENTER", self, "TOPLEFT", x, -y)
   end
 end
