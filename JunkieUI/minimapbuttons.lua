@@ -32,11 +32,11 @@ local PER_ROW = 6
 local SCAN_INTERVAL = 5   -- seconds between catch-up scans
 local SCAN_WINDOW   = 60  -- stop scanning entirely after this many seconds
 
-local BD_SOLID = {
+local BD_SOLID = J:PixelBackdrop({
   bgFile   = "Interface\\Buttons\\WHITE8X8",
   edgeFile = "Interface\\Buttons\\WHITE8X8",
   edgeSize = 1,
-}
+})
 
 local function Skin(frame)
   frame:SetBackdrop(BD_SOLID)

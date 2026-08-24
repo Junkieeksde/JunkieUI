@@ -19,6 +19,12 @@ C.TXT    = { 0.86, 0.84, 0.78 }
 C.DIM    = { 0.55, 0.53, 0.48 }
 C.BACKDROP = { 0.102, 0.102, 0.102 }
 
+-- One physical screen pixel expressed in UI units. Borders measured in units
+-- land on fractions of a pixel at non-integer scales (Medium = 1.125 px per
+-- unit), which is what makes single-pixel edges render doubled or missing.
+C.PIXEL = (JunkieUI and JunkieUI.PIXEL) or 1
+function C:Pixel(n) return ((JunkieUI and JunkieUI.PIXEL) or C.PIXEL) * (n or 1) end
+
 C.MAX_ICONS = 10
 C.MAX_ROW_ICONS = 12
 C.MAX_AURA_IDS = 9          -- one icon can watch up to nine aura IDs
@@ -131,7 +137,7 @@ function C:Flat(frame, r, g, b, a)
   frame:SetBackdrop({
     bgFile = "Interface\\Buttons\\WHITE8X8",
     edgeFile = "Interface\\Buttons\\WHITE8X8",
-    edgeSize = 1,
+    edgeSize = C:Pixel(1),
   })
   frame:SetBackdropColor(r or C.BOX[1], g or C.BOX[2], b or C.BOX[3], a or 1)
   frame:SetBackdropBorderColor(0, 0, 0, 1)

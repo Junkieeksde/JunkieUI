@@ -55,11 +55,11 @@ local DEBUFF_COLORS = {
 
 local BLIZZ_FRAMES = { "BuffFrame", "TemporaryEnchantFrame", "ConsolidatedBuffs" }
 
-local PREVIEW_BACKDROP = {
+local PREVIEW_BACKDROP = J:PixelBackdrop({
   bgFile   = "Interface\\Buttons\\WHITE8X8",
   edgeFile = "Interface\\Buttons\\WHITE8X8",
   edgeSize = 1,
-}
+})
 
 -- All module state lives here; nothing leaks into the global namespace.
 local state = {

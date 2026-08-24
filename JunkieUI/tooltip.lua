@@ -47,7 +47,7 @@ local function CreateAnchor()
   anchor:SetBackdrop({
     bgFile = "Interface\\Buttons\\WHITE8X8",
     edgeFile = "Interface\\Buttons\\WHITE8X8",
-    edgeSize = 1,
+    edgeSize = J.PIXEL,
   })
   anchor:SetBackdropColor(0.055, 0.055, 0.055, 0.9)
   anchor:SetBackdropBorderColor(0.871, 0.447, 0.188, 1)

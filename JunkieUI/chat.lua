@@ -12,7 +12,7 @@ J:AddModule(function()
   box:SetBackdrop({
     bgFile = "Interface\\Buttons\\WHITE8X8",
     edgeFile = "Interface\\Buttons\\WHITE8X8",
-    edgeSize = 1,
+    edgeSize = J.PIXEL,
   })
   box:SetBackdropColor(0.086, 0.086, 0.086, 0.6)
   box:SetBackdropBorderColor(J.BORDER[1], J.BORDER[2], J.BORDER[3], 1)
@@ -53,7 +53,7 @@ J:AddModule(function()
       ebbg:SetBackdrop({
         bgFile = "Interface\\Buttons\\WHITE8X8",
         edgeFile = "Interface\\Buttons\\WHITE8X8",
-        edgeSize = 1,
+        edgeSize = J.PIXEL,
       })
       ebbg:SetBackdropColor(0.086, 0.086, 0.086, 0.6)
       ebbg:SetBackdropBorderColor(J.BORDER[1], J.BORDER[2], J.BORDER[3], 1)

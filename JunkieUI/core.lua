@@ -10,10 +10,62 @@ J.modules = {}
 
 -- Colors -------------------------------------------------------------------
 J.BORDER = { 0.137, 0.137, 0.137 }
+
+-- Pixel helpers -------------------------------------------------------------
+-- A UI unit is only worth a whole physical pixel when scale * (screenH/768)
+-- is an integer. At Medium (1.125 px per unit) a 1-unit border lands on
+-- 1.125 px, so the rasterizer paints some edges 1 px and some 2 px - the
+-- "double pixel" look. The fix is to stop measuring borders in UI units and
+-- measure them in physical pixels instead: J.PIXEL is exactly one screen
+-- pixel expressed in UI units, so a border of that size is always 1 px.
+J.PIXEL = 1
+
+local function PhysicalHeight(scale)
+  local res = GetCVar and GetCVar("gxResolution")
+  local h = res and tonumber(string.match(res, "%d+x(%d+)"))
+  if h and h > 0 then return h end
+  -- No resolution CVar: derive it from the scale (768 / scale is exact for
+  -- the 1:1 step and a good approximation otherwise).
+  return 768 / (scale > 0 and scale or 1)
+end
+
+-- Shared backdrop tables register here so their edgeSize is corrected once the
+-- real scale is known (module files load before saved variables exist).
+J.pixelBackdrops = {}
+function J:PixelBackdrop(t)
+  J.pixelBackdrops[#J.pixelBackdrops + 1] = t
+  t.edgeSize = J.PIXEL * (t.jPixelEdge or 1)
+  return t
+end
+
+-- Round a size or offset to whole physical pixels.
+function J:Snap(v)
+  if not v or J.PIXEL <= 0 then return v end
+  return math.floor(v / J.PIXEL + 0.5) * J.PIXEL
+end
+
+function J:ApplyScale()
+  local scale = J:NormalizeScale()
+  SetCVar("useUiScale", 1)
+  -- The CVar is clamped to >= 0.64 on this client; the explicit SetScale below
+  -- is what actually decides the rendered scale, so keep both in sync.
+  SetCVar("uiScale", scale)
+  UIParent:SetScale(scale)
+
+  local pxPerUnit = scale * PhysicalHeight(scale) / 768
+  if pxPerUnit <= 0 then pxPerUnit = 1 end
+  J.PIXEL = 1 / pxPerUnit
+  for _, t in ipairs(J.pixelBackdrops) do
+    t.edgeSize = J.PIXEL * (t.jPixelEdge or 1)
+  end
+  -- The cooldown manager loads after this pass and reads the value from here.
+  if JunkieCD then JunkieCD.PIXEL = J.PIXEL end
+end
+
 J.BACKDROP = { 0.102, 0.102, 0.102 }
 
 J.defaults = {
-  uiScale = 0.6333,       -- Small 0.5333 | Medium 0.6333 | Large 0.7333
+  uiScale = 0.600000,     -- Small 0.533333 (1:1) | Medium 0.600000 (9:8) | Large 0.711111 (4:3)
   mapSize = 1,            -- minimap size step 1..5 (5 = 20% larger)
   fontChoice = "expressway", -- media.lua font key
   barTexture = "Flat",    -- statusbar texture name (media.lua / LibSharedMedia)
@@ -86,7 +138,7 @@ function J:SkinUnit(frame)
   local b = CreateFrame("Frame", nil, frame)
   b:SetAllPoints(frame)
   b:SetFrameLevel(frame:GetFrameLevel() + 3)
-  b:SetBackdrop({ edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = 1 })
+  b:SetBackdrop({ edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = J.PIXEL })
   b:SetBackdropBorderColor(0, 0, 0, 1)
   frame.jborder = b
   return frame
@@ -107,6 +159,7 @@ end
 -- fix or a color change lands everywhere at once.
 local WHITE8 = "Interface\\Buttons\\WHITE8X8"
 J.MOVER_BACKDROP = { bgFile = WHITE8, edgeFile = WHITE8, edgeSize = 1 }
+J:PixelBackdrop(J.MOVER_BACKDROP)
 J.MOVER_BORDER = { 0.871, 0.447, 0.188 }   -- ember (frames, totem bar)
 J.MOVER_BORDER_ALT = { 0.78, 0.64, 0.36 }  -- gold (loot rolls, quest tracker)
 
@@ -221,10 +274,29 @@ end
 -- Init ---------------------------------------------------------------------
 J:RegisterEvent("ADDON_LOADED")
 J:RegisterEvent("PLAYER_LOGIN")
-function J:ApplyScale()
-  SetCVar("useUiScale", 1)
-  SetCVar("uiScale", J.db.uiScale)
-  UIParent:SetScale(J.db.uiScale)
+-- Pixel-perfect scale ladder. On a 2560x1440 screen one UI unit maps to
+-- scale * (1440/768) physical pixels, so only clean ratios stay crisp:
+--   0.533333 -> 1.000 px  (1:1)
+--   0.600000 -> 1.125 px  (9:8, exact on multiples of 8)
+--   0.711111 -> 1.333 px  (4:3, exact on multiples of 3)
+J.SCALE_SMALL  = 768 / 1440          -- 0.533333
+J.SCALE_MEDIUM = 0.6                 -- 1.125 px per unit @1440p
+J.SCALE_LARGE  = 768 / 1080          -- 0.711111 -> 1.333 px per unit @1440p
+
+-- Legacy profiles stored the old hand-picked values; snap them to the nearest
+-- pixel-perfect step so nobody keeps a blurry scale after updating.
+local SCALE_LEGACY = {
+  ["0.5333"] = J.SCALE_SMALL,
+  ["0.6333"] = J.SCALE_MEDIUM,
+  ["0.7333"] = J.SCALE_LARGE,
+}
+
+function J:NormalizeScale()
+  local v = tonumber(J.db.uiScale) or J.SCALE_MEDIUM
+  local snapped = SCALE_LEGACY[string.format("%.4f", v)]
+  if snapped then v = snapped end
+  J.db.uiScale = v
+  return v
 end
 
 function J:AddModule(fn) table.insert(J.modules, fn) end

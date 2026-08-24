@@ -62,7 +62,7 @@ local COLOR_PANEL = { 0.098, 0.098, 0.098 }   -- #191919 plates
 local COLOR_SLOT = { 0.078, 0.078, 0.078 }    -- #141414 button background
 local WHITE8 = "Interface\\Buttons\\WHITE8X8"
 
-local BACKDROP = { bgFile = WHITE8, edgeFile = WHITE8, edgeSize = 1 }
+local BACKDROP = J:PixelBackdrop({ bgFile = WHITE8, edgeFile = WHITE8, edgeSize = 1 })
 
 -- Blizzard button prefixes that this module skins and places.
 local BAR_PREFIXES = {

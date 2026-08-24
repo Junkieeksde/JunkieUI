@@ -31,12 +31,12 @@ local CLOCK_H   = 20
 local TICK      = 5     -- clock refresh interval in seconds
 
 -- Shared backdrop tables (reused; never mutated after creation)
-local BD_EDGE = { edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = 1 }
-local BD_SOLID = {
+local BD_EDGE = J:PixelBackdrop({ edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = 1 })
+local BD_SOLID = J:PixelBackdrop({
   bgFile   = "Interface\\Buttons\\WHITE8X8",
   edgeFile = "Interface\\Buttons\\WHITE8X8",
   edgeSize = 1,
-}
+})
 local BD_BG = { bgFile = "Interface\\Buttons\\WHITE8X8" }
 
 -- Module state

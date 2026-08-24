@@ -131,7 +131,7 @@ end
 local function BuildPixel(frame)
   local g = BuildBase(frame, 0)
   g:SetFrameLevel(frame:GetFrameLevel() + 10)
-  g:SetBackdrop({ edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = 2 })
+  g:SetBackdrop({ edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = C:Pixel(2) })
   g:SetBackdropBorderColor(GLOW[1], GLOW[2], GLOW[3], 1)
   g.anim = Pulse(g, 0.35, 1, 0.45)
   g:Hide()

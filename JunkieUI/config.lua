@@ -11,11 +11,11 @@ local TXT     = { 0.86, 0.84, 0.78 }
 local DIM     = { 0.55, 0.53, 0.48 }
 
 
-local SCALES = { small = 0.5333, medium = 0.6333, large = 0.7333 }
+local SCALES = { small = 768 / 1440, medium = 0.6, large = 768 / 1080 }
 local function ScaleKey()
-  local v = (J.db and J.db.uiScale) or 0.6333
-  if v < 0.58 then return "small" end
-  if v < 0.68 then return "medium" end
+  local v = (J.db and J.db.uiScale) or SCALES.medium
+  if v < 0.567 then return "small" end
+  if v < 0.656 then return "medium" end
   return "large"
 end
 
@@ -23,7 +23,7 @@ local function Flat(frame, r, g, b, a)
   frame:SetBackdrop({
     bgFile = "Interface\\Buttons\\WHITE8X8",
     edgeFile = "Interface\\Buttons\\WHITE8X8",
-    edgeSize = 1,
+    edgeSize = J.PIXEL,
   })
   frame:SetBackdropColor(r, g, b, a or 1)
   frame:SetBackdropBorderColor(0.18, 0.17, 0.14, 1)
@@ -403,14 +403,14 @@ local function BuildPanel()
   local gen = pages[1]
   local y = -14
   Header(gen, "UI scaling", y); y = y - 22
-  Hint(gen, "Pick the scale that matches your resolution. Changing it reloads the interface.", y)
+  Hint(gen, "Pixel-perfect steps for 1440p: Small 1:1, Medium 9:8, Large 4:3. Changing it reloads the interface.", y)
   y = y - 26
   MakeDropdown(gen, "Interface scale", y, {
-    { key = "small",  name = "Small (0.5333)" },
-    { key = "medium", name = "Medium (0.6333)" },
-    { key = "large",  name = "Large (0.7333)" },
+    { key = "small",  name = "Small (0.5333 - 1:1)" },
+    { key = "medium", name = "Medium (0.6000 - 9:8)" },
+    { key = "large",  name = "Large (0.7111 - 4:3)" },
   }, ScaleKey(), function(key)
-    J.db.uiScale = SCALES[key] or 0.6333
+    J.db.uiScale = SCALES[key] or SCALES.medium
     if J.ApplyScale then J:ApplyScale() end
     if J.RequireReload then J:RequireReload() end
     print("|cff4fc3f7JunkieUI:|r interface scale changed - reloading the interface.")
