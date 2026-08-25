@@ -564,20 +564,44 @@ local function ButtonIcon(b)
   return icon
 end
 
+-- The flat list is kept for the tint clean-up, and the same buttons are also
+-- grouped by their parent container. The sweep can then ask "is this bar
+-- visible" once per bar instead of walking the whole parent chain once per
+-- button (IsVisible is one of the more expensive common calls on this client,
+-- and this loop cannot sleep while a target exists).
+local rangeGroups = nil
+
 local function RangeList()
   if rangeButtons then return rangeButtons end
   rangeButtons = {}
+  rangeGroups = {}
+  local byParent = {}
   for _, prefix in ipairs(BAR_PREFIXES) do
     for i = 1, 12 do
       local b = _G[prefix .. i]
       if b then
         b.JUI_ranged = true          -- marks the buttons this module owns
         rangeButtons[#rangeButtons + 1] = b
+        local parent = b:GetParent()
+        local group = byParent[parent or b]
+        if not group then
+          group = { parent = parent, n = 0 }
+          byParent[parent or b] = group
+          rangeGroups[#rangeGroups + 1] = group
+        end
+        group.n = group.n + 1
+        group[group.n] = b
       end
     end
   end
   return rangeButtons
 end
+
+local function RangeGroups()
+  if not rangeGroups then RangeList() end
+  return rangeGroups
+end
+
 
 local function ApplyRangeTint(b, oor)
   local icon = ButtonIcon(b)
@@ -610,6 +634,11 @@ local function ClearRangeTints()
       ApplyRangeTint(b, false)
     end
   end
+  -- Keep the per-bar "has tinted buttons" counters in sync with the flags we
+  -- just dropped, so the sweep may skip hidden bars again.
+  if rangeGroups then
+    for g = 1, #rangeGroups do rangeGroups[g].tinted = 0 end
+  end
 end
 
 local rangeTicker = CreateFrame("Frame")
@@ -624,26 +653,42 @@ rangeTicker:SetScript("OnUpdate", function(self, elapsed)
     self:Hide()
     return
   end
-  local list = RangeList()
-  for i = 1, #list do
-    local b = list[i]
-    local action = b.action
-    -- IsVisible() (not IsShown) skips every button on a bar that is hidden as
-    -- a whole, and HasAction skips empty slots: both are cheap local checks
-    -- that keep IsActionInRange off the buttons that could never tint anyway.
-    if action and b:IsVisible() and HasAction(action) then
-      local oor = (IsActionInRange(action) == 0) or false
-      if oor ~= (b.JUI_oor or false) then
-        b.JUI_oor = oor or nil
-        ApplyRangeTint(b, oor)
+  local groups = RangeGroups()
+  for g = 1, #groups do
+    local group = groups[g]
+    local parent = group.parent
+    -- One parent-chain walk per bar. With the bar itself visible, a button's
+    -- IsShown() is identical to its IsVisible(), and it is only a flag read.
+    local barVisible = (not parent) or parent:IsVisible()
+    -- A hidden bar with nothing tinted has no work at all: skipping the whole
+    -- group here removes 12 table/flag reads per hidden bar, five times a
+    -- second, for the entire time a target exists.
+    if barVisible or (group.tinted or 0) > 0 then
+      local tinted = 0
+      for i = 1, group.n do
+        local b = group[i]
+        local action = b.action
+        -- HasAction skips empty slots: cheap local checks that keep
+        -- IsActionInRange off the buttons that could never tint anyway.
+        if action and barVisible and b:IsShown() and HasAction(action) then
+          local oor = (IsActionInRange(action) == 0) or false
+          if oor ~= (b.JUI_oor or false) then
+            b.JUI_oor = oor or nil
+            ApplyRangeTint(b, oor)
+          end
+          if oor then tinted = tinted + 1 end
+        elseif b.JUI_oor then
+          -- Slot went empty or its bar was hidden while tinted: drop the flag so
+          -- a later action in that slot starts from a clean colour.
+          b.JUI_oor = nil
+          ApplyRangeTint(b, false)
+        end
       end
-    elseif b.JUI_oor then
-      -- Slot went empty or its bar was hidden while tinted: drop the flag so a
-      -- later action in that slot starts from a clean colour.
-      b.JUI_oor = nil
-      ApplyRangeTint(b, false)
+      group.tinted = tinted
     end
   end
+
+
 end)
 
 local function RefreshRangeAll()
@@ -1013,9 +1058,14 @@ local function MouseOverBars()
       if p:IsShown() and MouseIsOver(p) then return true end
     end
   end
-  for i = 1, 10 do
-    local p = _G["PetActionButton" .. i]
-    if p and p:IsVisible() and MouseIsOver(p) then return true end
+  -- The ten pet buttons are only worth walking when the pet bar is actually up;
+  -- otherwise this was ten IsVisible + MouseIsOver calls per tick for nothing.
+  local petBar = PetActionBarFrame
+  if (not petBar) or petBar:IsVisible() then
+    for i = 1, 10 do
+      local p = _G["PetActionButton" .. i]
+      if p and p:IsVisible() and MouseIsOver(p) then return true end
+    end
   end
   return false
 end
@@ -1025,11 +1075,21 @@ local function MouseoverTick(self, elapsed)
   if self.t < 0.1 then return end
   self.t = 0
 
+  -- A stationary cursor cannot change the answer. Two cursor reads are far
+  -- cheaper than the MouseIsOver sweep, and a full check is still forced twice
+  -- a second so a bar that shows/moves under a parked cursor is picked up.
+  local cx, cy = GetCursorPosition()
+  local now = GetTime()
+  if cx == self.cx and cy == self.cy and now - (self.full or 0) < 0.5 then return end
+  self.cx, self.cy = cx, cy
+  self.full = now
+
   local want = MouseOverBars()
   if want == barMouseoverShown then return end
   barMouseoverShown = want
   SetBarAlpha(want and 1 or 0)
 end
+
 
 function J:ApplyBarMouseover()
   local on = J.db and J.db.barMouseover and true or false
@@ -1367,15 +1427,25 @@ local function ApplyLayout()
       state.stanceParked = false
       state.stanceSig = nil
     end
+    -- IsShown() only reports the frame's own show flag; a shown frame below a
+    -- hidden parent still counts as shown to UIParent_ManageFramePositions.
+    -- Blizzard uses that flag to hide the shaman multicast bar, so restore the
+    -- real frame state when this option is enabled.
+    if ShapeshiftBarFrame then ShapeshiftBarFrame:Show() end
     PlaceStanceBar(used, true)
   else
     used["stance"] = false
-    if not state.stanceParked then
-      -- Hide the intact Blizzard frame. Never unregister its events: doing so
-      -- permanently breaks forms when the option is enabled again.
-      state.stanceParked = true
-      state.stanceSig = nil
-      if ShapeshiftBarFrame then ShapeshiftBarFrame:SetParent(Hider()) end
+    -- Reparenting alone does not make IsShown() false. Blizzard checks exactly
+    -- that flag and otherwise starts hiding MultiCastActionBarFrame whenever it
+    -- manages the stock bars. Keep the intact frame and all its events, but
+    -- explicitly hide it before parking it.
+    state.stanceParked = true
+    state.stanceSig = nil
+    if ShapeshiftBarFrame then
+      ShapeshiftBarFrame:Hide()
+      if ShapeshiftBarFrame:GetParent() ~= Hider() then
+        ShapeshiftBarFrame:SetParent(Hider())
+      end
     end
   end
 
@@ -1409,9 +1479,13 @@ end
 local function LockTotemBar()
   local bar = MultiCastActionBarFrame
   if not bar or bar.JUI_locking then return end
-  if InCombatLockdown and InCombatLockdown() then return end
+  if InCombatLockdown and InCombatLockdown() then
+    state.totemPending = true
+    return
+  end
 
   bar.JUI_locking = true
+  state.totemPending = false
   if J.db and J.db.totemBar == false then
     if not state.totemHider then
       state.totemHider = CreateFrame("Frame", "JunkieTotemHider", UIParent)
@@ -1420,6 +1494,24 @@ local function LockTotemBar()
     bar:SetParent(state.totemHider)
   else
     if bar:GetParent() ~= UIParent then bar:SetParent(UIParent) end
+
+    -- The stock show animation calls SetPoint every frame relative to the
+    -- frame's parent. Since JunkieUI deliberately anchors the bar elsewhere,
+    -- allowing that animation to finish can move it off-screen after our event
+    -- handler has already placed it. Cancel only a show transition when the
+    -- bar is genuinely available; native vehicle/possession hide transitions
+    -- are left untouched.
+    local canShow = (not HasMultiCastActionBar or HasMultiCastActionBar())
+      and (not UnitHasVehicleUI or not UnitHasVehicleUI("player"))
+      and not (PossessBarFrame and PossessBarFrame:IsShown())
+    if canShow then
+      bar.mode = "none"
+      bar.slideTimer = nil
+      bar.completed = true
+      bar.state = "top"
+      bar:Show()
+    end
+
     if J.db and J.db.totemMoved then
       ClampTotem()
       bar:ClearAllPoints()
@@ -1439,6 +1531,13 @@ local function LockTotemBar()
     watcher:RegisterEvent("PLAYER_REGEN_DISABLED")
     watcher:RegisterEvent("UPDATE_MULTI_CAST_ACTIONBAR")
     watcher:SetScript("OnEvent", LockTotemBar)
+
+    -- This stock layout pass can independently start a multicast hide/show
+    -- transition without emitting one of the events above. Re-apply once after
+    -- it returns; LockTotemBar never calls the manager, so no hook loop forms.
+    if hooksecurefunc and type(UIParent_ManageFramePositions) == "function" then
+      hooksecurefunc("UIParent_ManageFramePositions", LockTotemBar)
+    end
   end
 end
 J.LockTotemBar = LockTotemBar

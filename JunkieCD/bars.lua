@@ -124,13 +124,23 @@ end
 -- several times per cast in combat. Repainting every icon on each one is the
 -- single most expensive thing this addon can do, so the repaints are collapsed
 -- into one pass on the next frame.
+-- On top of the per-frame collapse the pass is rate limited to 20 Hz: while
+-- SPELL_UPDATE_USABLE spams (every mana/energy/rage tick) the queue would
+-- otherwise never get a quiet frame and end up repainting every single frame.
+-- A pass still runs on the very next frame whenever the previous one is older
+-- than 0.05s, so a cast still greys its icon immediately.
 local cdQueue = CreateFrame("Frame")
 cdQueue:Hide()
+local lastCooldownPass = 0
 cdQueue:SetScript("OnUpdate", function(self)
+  local now = GetTime()
+  if now - lastCooldownPass < 0.05 then return end
+  lastCooldownPass = now
   self:Hide()
   C:UpdateCooldowns()
 end)
 local function QueueCooldownUpdate() cdQueue:Show() end
+
 C.QueueCooldownUpdate = QueueCooldownUpdate
 
 -- Timer strings are shared by every icon. Cache each displayed value once so
@@ -964,10 +974,20 @@ local function UpdateCDIcon(f, profile)
       hasCharges = chargeProbe[chargeKey]
 
       -- Prefer a native/backported charge API when the client exposes one.
-      -- It is pcall-guarded because stock 3.3.5a has no GetSpellCharges.
+      -- The first probe per spell is pcall-guarded because stock 3.3.5a has no
+      -- GetSpellCharges; once a spell has answered successfully the call is
+      -- known to be safe, so the repaint path (which runs many times a second)
+      -- skips the fixed pcall cost from then on.
       if hasCharges ~= false and type(GetSpellCharges) == "function" then
-        local ok, c, mc, cs, cd = pcall(GetSpellCharges, shownEntry.id)
-        if (not ok or c == nil) and name then ok, c, mc, cs, cd = pcall(GetSpellCharges, name) end
+        local ok, c, mc, cs, cd
+        if hasCharges then
+          ok = true
+          c, mc, cs, cd = GetSpellCharges(shownEntry.id)
+          if c == nil and name then c, mc, cs, cd = GetSpellCharges(name) end
+        else
+          ok, c, mc, cs, cd = pcall(GetSpellCharges, shownEntry.id)
+          if (not ok or c == nil) and name then ok, c, mc, cs, cd = pcall(GetSpellCharges, name) end
+        end
         if ok and c ~= nil and mc and mc > 1 then
           charges, maxCharges = c, mc
           chargeStart, chargeDuration = cs, cd
@@ -976,6 +996,7 @@ local function UpdateCDIcon(f, profile)
           chargeProbe[chargeKey] = false
         end
       end
+
 
       -- Several Wrath custom clients expose recharge/count only through the
       -- action slot (the stock action button in the UI still knows the truth).
@@ -1050,7 +1071,8 @@ local function UpdateCDIcon(f, profile)
   local dim = cdDim or (not usable) or nomana
   SetDesat(f, dim)
 
-  SetIconAlpha(f, 1)
+  -- Alpha was already set to 1 at the top of this repaint; the second call was
+  -- a no-op that still cost a function call per icon per pass.
   -- Out of range reads as red, exactly like the action bars do.
   f.jcdInRange = inRange
   if not inRange then
@@ -1163,7 +1185,9 @@ rangeTicker:Hide()
 rangeTicker.elapsed = 0
 rangeTicker:SetScript("OnUpdate", function(self, elapsed)
   self.elapsed = self.elapsed + elapsed
-  if self.elapsed < 0.2 then return end
+  -- 0.35s instead of 0.2s: the colour flip is a slow visual cue, but this loop
+  -- cannot sleep while a target exists, so the lower rate is pure saving.
+  if self.elapsed < 0.35 then return end
   self.elapsed = 0
   if not UnitExists("target") then self:Hide(); return end
   for k in pairs(rangeMemo) do rangeMemo[k] = nil end
@@ -1741,15 +1765,29 @@ C:AddModule(function()
     self:Hide()
     local units, n = nil, 0
     for unit in pairs(auraDirty) do
-      auraDirty[unit] = nil
       n = n + 1
       units = unit
     end
     if n == 0 then return end
-    -- One dirty unit keeps the cheap single-unit path; several at once are
-    -- collapsed into the same full pass the target swap already uses.
-    if n == 1 then Repaint(units) else Repaint(nil) end
+    if n == 1 then
+      auraDirty[units] = nil
+      Repaint(units)
+      return
+    end
+    -- Several units dirty in the same frame: only the units that actually went
+    -- dirty are rescanned (a full pass would re-read all three units twice for
+    -- nothing), then everything is redrawn once from the refreshed cache.
+    for unit in pairs(auraDirty) do
+      auraDirty[unit] = nil
+      ScanAuraFilter(unit, "HELPFUL")
+      ScanAuraFilter(unit, "HARMFUL")
+    end
+    C:UpdateAuras(nil, true)
+    C:UpdateCooldowns()
+    C:UpdateCombo()
+    C:UpdatePower()
   end)
+
   local function QueueAuraRepaint(unit)
     auraDirty[unit] = true
     auraQueue:Show()

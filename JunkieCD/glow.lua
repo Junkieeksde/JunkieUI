@@ -72,11 +72,13 @@ end
 
 local function ProcUpdate(self, elapsed)
   self.elapsed = (self.elapsed or 0) + elapsed
-  -- 20 Hz remains visually smooth for the small chasing segments and halves
-  -- the repeated SetSize/ClearAllPoints/SetPoint layout work per active glow.
-  if self.elapsed < 0.05 then return end
+  -- 10 Hz: the movement is interpolated against the accumulated elapsed time,
+  -- so the loop takes exactly as long as before, at half the layout work
+  -- (9 SetPoint + SetSize checks per tick and per active glow).
+  if self.elapsed < 0.1 then return end
   elapsed = self.elapsed
   self.elapsed = 0
+
   local w, h = self:GetWidth() or 0, self:GetHeight() or 0
   local thickness, inset = PROC_THICKNESS, PROC_INSET
   if w <= thickness * 2 or h <= thickness * 2 then return end
@@ -125,7 +127,7 @@ local function BuildProc(frame)
   g.offset = 0
   g.elapsed = 0
   g.Resize = function(self)
-    self.elapsed = 0.05
+    self.elapsed = 0.1
     ProcUpdate(self, 0)
   end
   g:SetScript("OnUpdate", ProcUpdate)

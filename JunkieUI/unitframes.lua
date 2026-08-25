@@ -223,22 +223,32 @@ function UpdateHealthBar(f)
   -- Colour and text are only pushed when they actually changed. UNIT_HEALTH
   -- can fire dozens of times per second on a target, and rebuilding the
   -- string every tick was pure garbage for the collector.
-  local r, g, b
-  local _, class = UnitClass(unit)
-  -- The pet bar borrows the player's class colour so it reads as part of the
-  -- player block instead of the usual green "friendly npc" bar.
-  if f.JUI_style == "pet" then _, class = UnitClass("player") end
-  local c = RAID_CLASS_COLORS[class]
-  if (UnitIsPlayer(unit) or f.JUI_style == "pet") and c then
-    r, g, b = c.r * 0.9, c.g * 0.9, c.b * 0.9
-  else
-    r, g, b = UnitSelectionColor(unit)
-    r, g, b = r * 0.8, g * 0.8, b * 0.8
+  -- The colour itself is also cached: UnitClass/UnitIsPlayer/UnitSelectionColor
+  -- were run on every single health tick even though the answer only changes
+  -- when the unit changes (or, rarely, when it is tapped/changes faction), so
+  -- it is recomputed on a unit swap and at most twice a second otherwise.
+  local now = GetTime()
+  local guid = UnitGUID(unit)
+  local r, g, b = f.JUI_hr, f.JUI_hg, f.JUI_hb
+  if r == nil or guid ~= f.JUI_colorGUID or now - (f.JUI_colorAt or 0) >= 0.5 then
+    local _, class = UnitClass(unit)
+    -- The pet bar borrows the player's class colour so it reads as part of the
+    -- player block instead of the usual green "friendly npc" bar.
+    if f.JUI_style == "pet" then _, class = UnitClass("player") end
+    local c = RAID_CLASS_COLORS[class]
+    if (UnitIsPlayer(unit) or f.JUI_style == "pet") and c then
+      r, g, b = c.r * 0.9, c.g * 0.9, c.b * 0.9
+    else
+      r, g, b = UnitSelectionColor(unit)
+      r, g, b = r * 0.8, g * 0.8, b * 0.8
+    end
+    f.JUI_colorGUID, f.JUI_colorAt = guid, now
+    if f.JUI_hr ~= r or f.JUI_hg ~= g or f.JUI_hb ~= b then
+      f.JUI_hr, f.JUI_hg, f.JUI_hb = r, g, b
+      f.health:SetStatusBarColor(r, g, b)
+    end
   end
-  if f.JUI_hr ~= r or f.JUI_hg ~= g or f.JUI_hb ~= b then
-    f.JUI_hr, f.JUI_hg, f.JUI_hb = r, g, b
-    f.health:SetStatusBarColor(r, g, b)
-  end
+
 
   local style = f.JUI_style
   if style == "player" or style == "target" then
@@ -318,23 +328,29 @@ function UpdateName(f)
 end
 
 -- Raid mark (top center) + leader crown (top left)
+-- Both states are change-cached: target-of-target polls this four times a
+-- second, and re-issuing SetRaidTargetIconTexture/Show/Hide with the value the
+-- texture already has is pure C churn for no visual difference.
 function UpdateIndicators(f)
   local unit = f.unit
   local exists = UnitExists(unit)
   if f.mark then
-    local index = exists and GetRaidTargetIndex(unit)
-    if index then
-      SetRaidTargetIconTexture(f.mark, index)
-      f.mark:Show()
-    else
-      f.mark:Hide()
+    local index = (exists and GetRaidTargetIndex(unit)) or false
+    if f.JUI_markIndex ~= index then
+      f.JUI_markIndex = index
+      if index then
+        SetRaidTargetIconTexture(f.mark, index)
+        f.mark:Show()
+      else
+        f.mark:Hide()
+      end
     end
   end
   if f.leader then
-    if exists and UnitIsPartyLeader(unit) then
-      f.leader:Show()
-    else
-      f.leader:Hide()
+    local isLeader = (exists and UnitIsPartyLeader(unit)) and true or false
+    if f.JUI_leaderShown ~= isLeader then
+      f.JUI_leaderShown = isLeader
+      if isLeader then f.leader:Show() else f.leader:Hide() end
     end
   end
 end
