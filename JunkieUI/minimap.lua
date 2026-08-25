@@ -171,9 +171,10 @@ J:AddModule(function()
   -- -- Custom clock box -----------------------------------------------------
   local clock = CreateFrame("Button", "JunkieClock", Minimap)
   clock:SetHeight(CLOCK_H)
-  -- Docked directly underneath the minimap (1px flush with its border)
-  clock:SetPoint("TOPLEFT", Minimap, "BOTTOMLEFT", -1, -1)
-  clock:SetPoint("TOPRIGHT", Minimap, "BOTTOMRIGHT", 1, -1)
+  -- Docked underneath the minimap, shifted 2px up into the map and widened
+  -- 1px on each side so it always covers the minimap edge cleanly.
+  clock:SetPoint("TOPLEFT", Minimap, "BOTTOMLEFT", -1, 1)
+  clock:SetPoint("TOPRIGHT", Minimap, "BOTTOMRIGHT", 1, 1)
   clock:SetFrameStrata("MEDIUM")
   Skin(clock, BD_SOLID, 0.086, 0.086, 0.086, 1)
   clock:RegisterForClicks("LeftButtonUp", "RightButtonUp")

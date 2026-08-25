@@ -419,7 +419,21 @@ local function SkinButton(b)
   ClearButtonArt(_G[name .. "NormalTexture2"])
   ClearButtonArt(_G[name .. "FloatingBG"])
   ClearButtonArt(_G[name .. "Border"])
-  if b.GetCheckedTexture then ClearButtonArt(b:GetCheckedTexture()) end
+  -- Active-state marker: Blizzard's checked texture is what flags a toggled
+  -- ability (stance/aura/seal/tracking, auto-repeat shots, an active toy or
+  -- item effect - anything IsCurrentAction reports as on). The default artwork
+  -- does not fit the flat skin, so it is replaced with a tinted plate rather
+  -- than stripped. Blizzard keeps driving it through ActionButton_UpdateState,
+  -- so this costs nothing per frame.
+  if b.SetCheckedTexture then
+    b:SetCheckedTexture(WHITE8)
+    local ck = b:GetCheckedTexture()
+    if ck then
+      ck:SetVertexColor(1, 0.82, 0, 0.35)
+      ck:SetAllPoints(b)
+      ck:SetDrawLayer("OVERLAY")
+    end
+  end
 
   local icon = _G[name .. "Icon"]
   if icon then
