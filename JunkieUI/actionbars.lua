@@ -717,7 +717,9 @@ function J:ApplyBarBackground()
   for _, p in pairs(J.barPanels) do
     if on and p.JUI_used then p:Show() else p:Hide() end
   end
+  if J.ReapplyBarAlpha then J.ReapplyBarAlpha() end
 end
+
 
 -- Buttons are only repositioned; their shown state belongs to Blizzard.
 -- dir "right" fills rows left to right from BOTTOMLEFT, dir "down" fills a
@@ -955,6 +957,102 @@ local function NormalizeStanceFrame()
   end
 end
 
+-- 10b -- Mouseover show/hide -------------------------------------------------
+-- One global alpha for every action bar (main block, pet row, stance column and
+-- the plates/slots behind them). Detection is a single 10 Hz poll that only
+-- exists while the option is on; nothing runs when it is off. No fade -- on/off only.
+local barAlphaTicker
+local barMouseoverShown = true
+
+local function ForEachBarFrame(fn)
+  for _, prefix in ipairs(BAR_PREFIXES) do
+    for i = 1, 12 do
+      local b = _G[prefix .. i]
+      if b then fn(b) end
+    end
+  end
+  for i = 1, 10 do
+    local p = _G["PetActionButton" .. i]
+    if p then fn(p) end
+    local s = _G["ShapeshiftButton" .. i]
+    if s then fn(s) end
+  end
+  if state.slotPool then
+    for _, s in ipairs(state.slotPool) do fn(s) end
+  end
+  if J.bar1Slots then
+    for i = 1, 12 do
+      local s = J.bar1Slots[i]
+      if s then
+        fn(s)
+        if s.keyLayer then fn(s.keyLayer) end
+      end
+    end
+  end
+  if J.barPanels then
+    for _, p in pairs(J.barPanels) do fn(p) end
+  end
+end
+
+local function SetBarAlpha(a)
+  ForEachBarFrame(function(f)
+    if f.SetAlpha then f:SetAlpha(a) end
+  end)
+end
+
+-- Re-applied after any pass that resets alpha on the secure buttons.
+local function ReapplyBarAlpha()
+  if J.db and J.db.barMouseover then SetBarAlpha(barMouseoverShown and 1 or 0) end
+end
+J.ReapplyBarAlpha = ReapplyBarAlpha
+
+local function MouseOverBars()
+  if J.barHolder and MouseIsOver(J.barHolder) then return true end
+  if J.barPanels then
+    for _, p in pairs(J.barPanels) do
+      if p:IsShown() and MouseIsOver(p) then return true end
+    end
+  end
+  for i = 1, 10 do
+    local p = _G["PetActionButton" .. i]
+    if p and p:IsVisible() and MouseIsOver(p) then return true end
+  end
+  return false
+end
+
+local function MouseoverTick(self, elapsed)
+  self.t = (self.t or 0) + elapsed
+  if self.t < 0.1 then return end
+  self.t = 0
+
+  local want = MouseOverBars()
+  if want == barMouseoverShown then return end
+  barMouseoverShown = want
+  SetBarAlpha(want and 1 or 0)
+end
+
+function J:ApplyBarMouseover()
+  local on = J.db and J.db.barMouseover and true or false
+  if not barAlphaTicker then
+    barAlphaTicker = CreateFrame("Frame")
+    barAlphaTicker:Hide()
+  end
+  if not on then
+    barAlphaTicker:SetScript("OnUpdate", nil)
+    barAlphaTicker:Hide()
+    barMouseoverShown = true
+    SetBarAlpha(1)
+    return
+  end
+  barMouseoverShown = MouseOverBars()
+  SetBarAlpha(barMouseoverShown and 1 or 0)
+  barAlphaTicker.t = 0
+  barAlphaTicker:SetScript("OnUpdate", MouseoverTick)
+  barAlphaTicker:Show()
+end
+
+
+
 -- Cheap fingerprint of the anchor the bar currently carries. Blizzard's own
 -- login pass (and UIParent_ManageFramePositions) can re-anchor or re-scale the
 -- column after we placed it; a mode/form-count signature alone cannot see that,
@@ -1039,7 +1137,9 @@ local function PlaceStanceBar(used, force)
   -- Recorded after the placement so the fingerprint describes our own final
   -- geometry. Any later foreign move/scale changes it and unlocks one pass.
   state.stanceSig = tostring(mode) .. ":" .. numForms .. ":" .. StanceGeomSig()
+  ReapplyBarAlpha()
   return true
+
 end
 J.PlaceStanceBar = PlaceStanceBar
 
@@ -1104,7 +1204,9 @@ local function PlacePetBar()
       b:SetFrameLevel(5)
     end
   end
+  ReapplyBarAlpha()
 end
+
 
 -- 11 -- Layout engine ---------------------------------------------------------
 local function CurrentMode()
@@ -1279,7 +1381,9 @@ local function ApplyLayout()
 
   HideUnusedPanels(used)
   SkinAll()
+  ReapplyBarAlpha()
 end
+
 J.ApplyBarLayout = ApplyLayout
 
 -- 12 -- Totem bar -------------------------------------------------------------
@@ -1541,6 +1645,8 @@ J:AddModule(function()
   J.ApplyCooldownText()
   J.ApplyMacroText()
   ApplyKeyPressDown()
+  J:ApplyBarMouseover()
+
 end)
 
 -- Totem bar anchor: optional mover + show/hide toggle (mirrors the quest

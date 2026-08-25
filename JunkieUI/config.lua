@@ -563,6 +563,13 @@ local function BuildPanel()
   end)
 
   y = y - 24
+  MakeCheck(a, "Mouseover: hide the action bars until hovered", y, J.db.barMouseover, function(v)
+    J.db.barMouseover = v
+    if J.ApplyBarMouseover then J:ApplyBarMouseover() end
+  end)
+
+
+  y = y - 24
   MakeCheck(a, "Trigger actions on key press (down) instead of release", y, J.db.keyPressDown, function(v)
     local old = J.db.keyPressDown
     J.db.keyPressDown = v

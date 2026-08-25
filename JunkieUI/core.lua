@@ -74,6 +74,8 @@ J.defaults = {
   keyPressDown = false,   -- trigger action buttons on key/mouse down instead of up
   barLayout = "one",      -- one | three | triple | tripleHigh | sebby
   barBackground = true,   -- background plates behind the action bars
+  barMouseover = false,   -- action bars hidden until the mouse hovers them
+
   stanceBar = false,      -- show the stance / shapeshift bar (top left)
   microMenu = false,      -- show Blizzard's micro menu under the clock bar
 
