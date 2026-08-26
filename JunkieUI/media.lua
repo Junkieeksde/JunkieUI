@@ -1,4 +1,15 @@
--- Fonts / textures
+--[[---------------------------------------------------------------------------
+  JunkieUI - Media
+
+  Font and statusbar texture registry. Paths are validated once at load so a
+  missing or corrupt file silently falls back instead of erroring later.
+
+  Cost: one throwaway fontstring per candidate font at load, nothing after.
+
+  Sections:
+    1. Bar textures
+    2. Registered bars
+-------------------------------------------------------------------------------]]
 local J = JunkieUI
 
 J.FALLBACK_BAR = "Interface\\Buttons\\WHITE8X8"
@@ -33,7 +44,9 @@ end
 -- Safe default before saved variables load.
 J.font = Valid(J.fonts[1].path) and J.fonts[1].path or STANDARD_TEXT_FONT
 
--- Bar textures ---------------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- 1. Bar textures
+-- ---------------------------------------------------------------------------
 -- Everything LibSharedMedia knows about, plus the textures Ascension ships
 -- inside its own interface files (they are not always registered with LSM).
 local BUILTIN = {
@@ -92,7 +105,9 @@ function J:TexturePath(key)
   return J.FALLBACK_BAR
 end
 
--- Registered bars ------------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- 2. Registered bars
+-- ---------------------------------------------------------------------------
 J.bars = {}
 
 local function Paint(bar)

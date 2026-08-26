@@ -1,13 +1,26 @@
--- ============================================================================
--- JunkieUI - Minimap button collector
--- Collects addon minimap buttons into a single box locked to the minimap's
--- clock bar. Click the box to fold the buttons out.
--- ============================================================================
+--[[---------------------------------------------------------------------------
+  JunkieUI - Minimap button collector
+
+  Collects addon minimap buttons into a single box locked to the minimap's
+  clock bar. Click the box to fold the buttons out.
+
+  Cost: the discovery sweep runs only during the first minute after login, to
+  catch late-loading addons, and then removes its own OnUpdate for good.
+
+  Sections:
+    1. Upvalues
+    2. Constants
+    3. Module state (all file-local)
+    4. Filters
+    5. Layout
+    6. Collection
+    7. Module
+-------------------------------------------------------------------------------]]
 
 local J = JunkieUI
 
 -- ---------------------------------------------------------------------------
--- Upvalues
+-- 1. Upvalues
 -- ---------------------------------------------------------------------------
 local CreateFrame = CreateFrame
 local Minimap     = Minimap
@@ -22,7 +35,7 @@ local min     = math.min
 local max     = math.max
 
 -- ---------------------------------------------------------------------------
--- Constants
+-- 2. Constants
 -- ---------------------------------------------------------------------------
 local BOX     = 18   -- size of the toggle box (sits inside the clock box)
 local ICON    = 32   -- grid cell size for each collected button
@@ -45,7 +58,7 @@ local function Skin(frame)
 end
 
 -- ---------------------------------------------------------------------------
--- Module state (all file-local)
+-- 3. Module state (all file-local)
 -- ---------------------------------------------------------------------------
 local collected = {}
 local orig      = setmetatable({}, { __mode = "k" })
@@ -58,7 +71,7 @@ local rejected  = setmetatable({}, { __mode = "k" })
 local box, bar, label
 
 -- ---------------------------------------------------------------------------
--- Filters
+-- 4. Filters
 -- ---------------------------------------------------------------------------
 local blacklist = {
   MiniMapTrackingFrame      = true,
@@ -134,7 +147,7 @@ local function LooksLikeButton(frame, name)
 end
 
 -- ---------------------------------------------------------------------------
--- Layout
+-- 5. Layout
 -- ---------------------------------------------------------------------------
 local function Layout()
   local shown = 0
@@ -162,7 +175,7 @@ local function Layout()
 end
 
 -- ---------------------------------------------------------------------------
--- Collection
+-- 6. Collection
 -- ---------------------------------------------------------------------------
 local noop = function() end
 
@@ -241,7 +254,7 @@ local function Scan()
 end
 
 -- ---------------------------------------------------------------------------
--- Module
+-- 7. Module
 -- ---------------------------------------------------------------------------
 J:AddModule(function()
   box = CreateFrame("Button", "JunkieMinimapButtonBox", JunkieClock or Minimap)

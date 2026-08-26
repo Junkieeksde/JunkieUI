@@ -1,7 +1,28 @@
--- Junkie CD - cooldown manager
--- Core: namespace, profiles, shared helpers.
--- Designed to be folded into JunkieUI later: everything lives on the JunkieCD
--- table and never touches JunkieUI's own saved variables.
+--[[---------------------------------------------------------------------------
+  JunkieCD - Core
+
+  Namespace, profiles and shared helpers for the cooldown manager. Designed to
+  be folded into JunkieUI later: everything lives on the JunkieCD table and
+  never touches JunkieUI's own saved variables.
+
+  Cost: the recurring work here is a set of self-stopping driver frames (retry,
+  pending, settle). Each one hides itself as soon as its job is done, so the
+  addon has no permanent OnUpdate.
+
+  Sections:
+    1. Shared JunkieUI palette
+    2. Alert sounds shipped with the addon
+    3. Font
+    4. Profiles
+    5. Universal bar slots
+    6. Mini sets
+    7. Stances / shapeshifts
+    8. Characters
+    9. Spell knowledge
+    10. Reload prompt
+    11. Init
+    12. Login settle pass
+-------------------------------------------------------------------------------]]
 
 local ADDON = ...
 
@@ -11,7 +32,9 @@ local C = JunkieCD
 C.version = "2.5.2"
 C.modules = {}
 
--- Shared JunkieUI palette ---------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- 1. Shared JunkieUI palette
+-- ---------------------------------------------------------------------------
 C.ACCENT = { 0.871, 0.447, 0.188 }
 C.BG     = { 0.055, 0.055, 0.055 }
 C.BOX    = { 0.09, 0.09, 0.09 }
@@ -29,7 +52,9 @@ C.MAX_ICONS = 10
 C.MAX_ROW_ICONS = 12
 C.MAX_AURA_IDS = 9          -- one icon can watch up to nine aura IDs
 
--- Alert sounds shipped with the addon --------------------------------------
+-- ---------------------------------------------------------------------------
+-- 2. Alert sounds shipped with the addon
+-- ---------------------------------------------------------------------------
 local SOUND_PATH = "Interface\\AddOns\\JunkieCD\\media\\"
 C.SOUNDS = {
   { key = "none",     name = "No sound" },
@@ -104,7 +129,9 @@ function C:PowerInfo(key)
   return POWER_BY_KEY[key] or C.POWER_TYPES[1]
 end
 
--- Font ----------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- 3. Font
+-- ---------------------------------------------------------------------------
 local function PickFont()
   local test = UIParent:CreateFontString(nil, "OVERLAY")
   -- Built with tinsert on purpose: a nil first entry would make ipairs stop on
@@ -144,7 +171,9 @@ function C:Flat(frame, r, g, b, a)
   return frame
 end
 
--- Profiles ------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- 4. Profiles
+-- ---------------------------------------------------------------------------
 function C:NewPower()
   return {
     enabled = false,
@@ -159,7 +188,9 @@ function C:NewPower()
   }
 end
 
--- Universal bar slots ---------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- 5. Universal bar slots
+-- ---------------------------------------------------------------------------
 -- The three bars above the cooldown row are identical slots. Each one is either
 -- a resource bar (a fluid bar: a power type, or the stacks of any aura) or a
 -- combo point bar (segmented plates: combo points, aura stacks or charges).
@@ -288,7 +319,6 @@ function C:NewProfile(name)
     unitIconSize = 35,   -- the two bars glued to the player unit frame
     castbarTop = false,  -- dock the JunkieUI player castbar on top (per profile)
     castbarHeight = 20,  -- height of the docked player castbar (15-50)
-    showGCD = false,     -- draw the global cooldown swipe on both CD bars
     mainEnabled = false,
     subEnabled = false,
     upEnabled = false,
@@ -331,7 +361,9 @@ function C:NewProfile(name)
   }
 end
 
--- Mini sets -------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- 6. Mini sets
+-- ---------------------------------------------------------------------------
 function C:NewStanceSet()
   return {
     mainEnabled = false,
@@ -550,7 +582,9 @@ function C:ActiveBars()
   return C:MigrateBars(p, p.combo)
 end
 
--- Stances / shapeshifts -------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- 7. Stances / shapeshifts
+-- ---------------------------------------------------------------------------
 function C:StanceCount()
   local ok, n = pcall(GetNumShapeshiftForms)
   return (ok and n) or 0
@@ -569,7 +603,9 @@ function C:StanceName(i)
   return "Form " .. i
 end
 
--- Characters ------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- 8. Characters
+-- ---------------------------------------------------------------------------
 function C:CharacterName()
   return UnitName("player") or "?"
 end
@@ -580,7 +616,9 @@ function C:CharKey()
   return name .. " - " .. realm
 end
 
--- Spell knowledge -------------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- 9. Spell knowledge
+-- ---------------------------------------------------------------------------
 -- The spellbook is the only reliable source in 3.3.5: IsSpellKnown answers
 -- false for a lot of things the player really owns (racials, profession and
 -- pet book entries), which is why the book is scanned by name and cached.
@@ -817,7 +855,9 @@ function C:ResolveProfileName()
   return names[1]
 end
 
--- Reload prompt ---------------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- 10. Reload prompt
+-- ---------------------------------------------------------------------------
 StaticPopupDialogs["JUNKIECD_RELOAD"] = {
   text = "JunkieCD: %s\nA UI reload is needed for stable performance.",
   button1 = "Reload now",
@@ -880,14 +920,15 @@ function C:DeleteProfile(name)
   C:UseProfile(C.db.resolved, true)
 end
 
--- Init ----------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- 11. Init
+-- ---------------------------------------------------------------------------
 local function Defaults()
   return {
     profiles = {},
     charProfile = {},        -- ["Name - Realm"] = profile name
     active = "Default",
     locked = true,
-    cooldownText = true,     -- one global timer-text switch for CDs and auras
     castbarTop = false,      -- dock the JunkieUI player castbar on top
     castbarHeight = 20,      -- height of the docked player castbar (15-50)
   }
@@ -1025,7 +1066,9 @@ pending:SetScript("OnUpdate", function(self)
 end)
 function C:QueueRebuild() pending:Show() end
 
--- Login settle pass ----------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- 12. Login settle pass
+-- ---------------------------------------------------------------------------
 -- The first rebuild after login happens before JunkieUI has placed its unit
 -- frames and before the client has finished handing out the spellbook and the
 -- item cache, so docked rows and the anchor can land on fallback positions.

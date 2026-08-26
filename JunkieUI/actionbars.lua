@@ -20,36 +20,45 @@
       and never while InCombatLockdown() is true.
     * Visibility of the normal Bar1 set is driven by ONE secure state driver.
 
-  SECTIONS
-    1  Upvalues and constants        7  Bar1 slot row and keybinds
-    2  Module state                  8  Micro menu
-    3  Shared helpers                9  Stance bar
-    4  Cooldown text                10  Pet bar
-    5  Macro text                   11  Layout engine
-    6  Button skinning              12  Totem bar
-                                    13  Init
+  Cost: no OnUpdate remains during play. The stance settle pass and the icon
+  cache both remove their own driver a few seconds after login. Range colouring
+  and cooldown numbers are left to Blizzard and OmniCC respectively.
+
+  Sections:
+     1. Upvalues and constants        8. Micro menu
+     2. Module state                  9. Stance bar
+     3. Shared helpers               10. Pet bar
+     4. Macro text                   11. Layout engine
+     5. Button skinning              12. Totem bar
+     6. Key press down               13. Init
+     7. Bar1 slot row and keybinds
 -----------------------------------------------------------------------------]]
 
 local J = JunkieUI
 
--- 1 -- Upvalues and constants -------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- 1. Upvalues and constants
+-- ---------------------------------------------------------------------------
 -- Lua 5.1 resolves every global through a hash lookup. The skin path and the
--- cooldown driver run per button and per frame, so their API calls are cached.
+-- skin path runs per button, so its API calls are cached.
 local _G = _G
 local CreateFrame = CreateFrame
-local GetTime = GetTime
 local InCombatLockdown = InCombatLockdown
 local hooksecurefunc = hooksecurefunc
 local ipairs, pairs, type, tostring = ipairs, pairs, type, tostring
 local floor, max = math.floor, math.max
-local format = string.format
 local tsort = table.sort
 
-local BASESIZE = 32          -- default button edge
+-- Button edges. The two BASE_* values are the 100% reference; BASESIZE and
+-- PETSIZE are recomputed from the size slider (100 / 90 / 80 / 70 %) once per
+-- layout pass, so every position below scales with them automatically.
+local BASE_BUTTON, BASE_PET = 32, 27
+local BASESIZE = BASE_BUTTON -- default button edge
 local GAP = 2                -- space between buttons
 local EDGE = 3               -- distance to the screen edge
 local PAD = 2                -- background plate padding
-local PETSIZE = 27
+local PETSIZE = BASE_PET
+
 -- Horizontal spacing between the vertical right-edge columns. Set to 1 so the
 -- right-edge columns have a 1 pixel gap. The background plates still
 -- bleed their PAD outward and will overlap slightly, but they are the same
@@ -114,14 +123,15 @@ local MOUSE_OFF_FRAMES = {
   "MultiBarRight", "MultiBarLeft", "MultiBarBottomLeft", "MultiBarBottomRight",
 }
 
--- 2 -- Module state -----------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- 2. Module state
+-- ---------------------------------------------------------------------------
 -- Every mutable value of this module lives here, so nothing can be read before
 -- it is assigned and no helper can shadow another helper's bookkeeping.
 local state = {
   size = BASESIZE,          -- current bottom-stack button size
   layoutPending = false,    -- a layout pass was deferred by combat
   bar1Driven = false,       -- secure visibility driver installed
-  cooldownHooked = false,   -- Cooldown.SetCooldown hook installed
   microList = nil,          -- cached micro button names
   microHooked = false,
   microScanned = false,
@@ -134,12 +144,12 @@ local state = {
   hider = nil,              -- permanently hidden reparent target
   slotPool = {},
   slotUsed = 0,
-  cooldowns = {},           -- [cooldownFrame] = true, all registered
-  activeCooldowns = {},     -- [cooldownFrame] = true, currently counting down
   macroTexts = {},          -- [fontString] = true
 }
 
--- 3 -- Shared helpers ---------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- 3. Shared helpers
+-- ---------------------------------------------------------------------------
 local function Hider()
   if not state.hider then
     state.hider = CreateFrame("Frame", "JunkieHiddenParent", UIParent)
@@ -232,142 +242,14 @@ local function HookBagUpdates()
 end
 
 
--- 4 -- Cooldown text ----------------------------------------------------------
-local cdSecondText, cdMinuteText, cdHourText = {}, {}, {}
-local function FormatCD(remaining)
-  local value, cache, suffix
-  if remaining >= 3600 then
-    value, cache, suffix = floor(remaining / 3600 + 0.5), cdHourText, "h"
-  elseif remaining > 60 then
-    value, cache, suffix = floor(remaining / 60 + 0.5), cdMinuteText, "m"
-  else
-    value, cache, suffix = floor(remaining + 0.5), cdSecondText, ""
-  end
-  local text = cache[value]
-  if not text then text = tostring(value) .. suffix; cache[value] = text end
-  return text
-end
+-- NOTE (cooldown text): this module draws none. Cooldown numbers are left to
+-- OmniCC, which paints them on the native swipe without a second timer loop
+-- over every button.
 
-local cdDriver = CreateFrame("Frame")
-cdDriver.elapsed = 0
-cdDriver:Hide()
-cdDriver:SetScript("OnUpdate", function(self, elapsed)
-  self.elapsed = self.elapsed + elapsed
-  if self.elapsed < 0.2 then return end
-  self.elapsed = 0
-  if not (J.db and J.db.cooldownText) then self:Hide(); return end
 
-  local now = GetTime()
-  local active = state.activeCooldowns
-  local hasActive = false
-  for cd in pairs(active) do
-    local text = cd.JUI_text
-    local start, duration = cd.JUI_start, cd.JUI_duration
-    if text and start and duration and duration > 1.5 then
-      local remaining = start + duration - now
-      if remaining > 0 then
-        hasActive = true
-        if cd:IsShown() then
-          -- Only touch the font string when the printed value changed: with a
-          -- full bar set this loop visits every button five times a second and
-          -- each SetText re-lays the string out.
-          local str = FormatCD(remaining)
-          if cd.JUI_shownCD ~= str then
-            cd.JUI_shownCD = str
-            text:SetText(str)
-          end
-          local low = remaining <= 5
-          if cd.JUI_lowCD ~= low then
-            cd.JUI_lowCD = low
-            if low then
-              text:SetTextColor(1, 0.25, 0.25)
-            else
-              text:SetTextColor(1, 0.85, 0.2)
-            end
-          end
-          text:Show()
-        end
-      else
-        if cd.JUI_shownCD ~= "" then
-          cd.JUI_shownCD = ""
-          text:SetText("")
-        end
-        cd.JUI_start, cd.JUI_duration = nil, nil
-        active[cd] = nil
-      end
-    else
-      active[cd] = nil
-    end
-  end
-  if not hasActive then self:Hide() end
-end)
-
--- Installed once from the init block, never lazily per button: a lazy install
--- retried the metatable lookup for every button when the first one failed.
-local function HookCooldowns(sample)
-  if state.cooldownHooked or not sample then return end
-  local meta = getmetatable(sample)
-  local proto = meta and meta.__index
-  if not (proto and proto.SetCooldown) then return end
-  state.cooldownHooked = true
-
-  hooksecurefunc(proto, "SetCooldown", function(self, start, duration)
-    if not state.cooldowns[self] then return end
-    self.JUI_start, self.JUI_duration = start, duration
-    if duration and duration > 1.5 and start + duration > GetTime() then
-      state.activeCooldowns[self] = true
-      if J.db and J.db.cooldownText then cdDriver:Show() end
-    else
-      state.activeCooldowns[self] = nil
-    end
-    if not (J.db and J.db.cooldownText) and self.JUI_text then
-      self.JUI_shownCD, self.JUI_lowCD = "", nil
-      self.JUI_text:SetText("")
-    end
-  end)
-end
-
-local function RegisterCooldown(cd)
-  if not cd or cd.JUI_text then return end
-  local text = cd:CreateFontString(nil, "OVERLAY")
-  text:SetFont(J.font, 13, "OUTLINE")
-  text:SetPoint("CENTER", cd, "CENTER", 0, 1)
-  text:SetShadowOffset(0, 0)
-  cd.JUI_text = text
-  state.cooldowns[cd] = true
-  HookCooldowns(cd)
-end
-
--- Called by the options window when the toggle changes.
-function J.ApplyCooldownText()
-  local on = J.db and J.db.cooldownText
-  local active = state.activeCooldowns
-  local hasActive = false
-
-  for cd in pairs(state.cooldowns) do
-    local text = cd.JUI_text
-    if text then
-      if on then
-        local start, duration = cd.JUI_start, cd.JUI_duration
-        if start and duration and duration > 1.5 and (start + duration - GetTime()) > 0 then
-          active[cd] = true
-          hasActive = true
-        end
-      else
-        -- Turning the option off must clear the pending set immediately,
-        -- otherwise stale entries survive until the driver next runs.
-        active[cd] = nil
-        cd.JUI_shownCD, cd.JUI_lowCD = "", nil
-        text:SetText("")
-        text:Hide()
-      end
-    end
-  end
-
-  if on and hasActive then cdDriver:Show() else cdDriver:Hide() end
-end
-
--- 5 -- Macro text -------------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- 4. Macro text
+-- ---------------------------------------------------------------------------
 function J.ApplyMacroText()
   local on = J.db and J.db.macroText
   for fs in pairs(state.macroTexts) do
@@ -375,7 +257,9 @@ function J.ApplyMacroText()
   end
 end
 
--- 6 -- Button skinning --------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- 5. Button skinning
+-- ---------------------------------------------------------------------------
 -- Blizzard restores normal textures while actions and pages change. The art is
 -- cleared from the regular update path instead of hooking each texture.
 local function ClearButtonArt(tex)
@@ -408,7 +292,10 @@ local function SkinButton(b)
 
   -- Bar 1 (and its stance page) uses one persistent label from the slot row,
   -- so Blizzard's own two competing strings stay invisible there.
-  b.JUI_ownKeyLabel = (name:match("^ActionButton%d+$") or name:match("^BonusActionButton%d+$")) and true or false
+  -- Blizzard's own hotkey string is used on every bar, including bar 1: its
+  -- OnUpdate paints that string red when the action is out of range, which is
+  -- the native (free) range indicator.
+  b.JUI_ownKeyLabel = false
 
   local normalTex = _G[name .. "NormalTexture"] or (b.GetNormalTexture and b:GetNormalTexture())
   b.JUI_normalTex = normalTex
@@ -419,19 +306,16 @@ local function SkinButton(b)
   ClearButtonArt(_G[name .. "NormalTexture2"])
   ClearButtonArt(_G[name .. "FloatingBG"])
   ClearButtonArt(_G[name .. "Border"])
-  -- Active-state marker: Blizzard's checked texture is what flags a toggled
-  -- ability (stance/aura/seal/tracking, auto-repeat shots, an active toy or
-  -- item effect - anything IsCurrentAction reports as on). The default artwork
-  -- does not fit the flat skin, so it is replaced with a tinted plate rather
-  -- than stripped. Blizzard keeps driving it through ActionButton_UpdateState,
-  -- so this costs nothing per frame.
+  -- Blizzard's checked texture (the yellow "active" plate) is stripped
+  -- completely: it is stale on empty slots after a stance/page swap and adds
+  -- nothing to the flat skin. Removed once, no per-frame or per-update work.
   if b.SetCheckedTexture then
-    b:SetCheckedTexture(WHITE8)
+    b:SetCheckedTexture("")
     local ck = b:GetCheckedTexture()
     if ck then
-      ck:SetVertexColor(1, 0.82, 0, 0.35)
-      ck:SetAllPoints(b)
-      ck:SetDrawLayer("OVERLAY")
+      ck:SetTexture(nil)
+      ck:SetAlpha(0)
+      ck:Hide()
     end
   end
 
@@ -466,7 +350,6 @@ local function SkinButton(b)
     cd:ClearAllPoints()
     cd:SetPoint("TOPLEFT", b, "TOPLEFT", 1, -1)
     cd:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", -1, 1)
-    RegisterCooldown(cd)
     if cd.SetDrawEdge then cd:SetDrawEdge(false) end
   end
 
@@ -478,7 +361,6 @@ local function SkinButton(b)
     hotkey:ClearAllPoints()
     hotkey:SetPoint("TOPRIGHT", b, "TOPRIGHT", -2, -2)
     hotkey:SetJustifyH("RIGHT")
-    if b.JUI_ownKeyLabel then hotkey:SetAlpha(0) end
   end
 
   local count = _G[name .. "Count"]
@@ -511,7 +393,9 @@ local function SkinAll()
 end
 
 
--- Key press down ---------------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- 6. Key press down
+-- ---------------------------------------------------------------------------
 -- "Cast on key down" is two separate switches on this client: the CVar drives
 -- keybinds (Blizzard's ActionButton_Down path) and RegisterForClicks drives
 -- actual mouse clicks. Both are set once, at login, and after the forced reload
@@ -543,163 +427,10 @@ end
 J.ApplyKeyPressDown = ApplyKeyPressDown
 
 
--- Range check ----------------------------------------------------------------
--- Blizzard's own range timer does not drive every bar on this client (the main
--- bar in particular repaints only when an action happens), so the tint is owned
--- here instead: one 5Hz ticker, parked whenever there is no target, and the
--- icon is only touched when the range flag actually flips.
--- IsActionInRange returns 0 both when the target is too far away and when it
--- is inside a spell's minimum range (deadzone), which is exactly the two cases
--- the icon should read as red.
-local RANGE_R, RANGE_G, RANGE_B = 1, 0.25, 0.25
-local rangeButtons = nil
-
-local function ButtonIcon(b)
-  local icon = b.JUI_icon
-  if not icon then
-    local name = b:GetName()
-    icon = name and _G[name .. "Icon"]
-    b.JUI_icon = icon
-  end
-  return icon
-end
-
--- The flat list is kept for the tint clean-up, and the same buttons are also
--- grouped by their parent container. The sweep can then ask "is this bar
--- visible" once per bar instead of walking the whole parent chain once per
--- button (IsVisible is one of the more expensive common calls on this client,
--- and this loop cannot sleep while a target exists).
-local rangeGroups = nil
-
-local function RangeList()
-  if rangeButtons then return rangeButtons end
-  rangeButtons = {}
-  rangeGroups = {}
-  local byParent = {}
-  for _, prefix in ipairs(BAR_PREFIXES) do
-    for i = 1, 12 do
-      local b = _G[prefix .. i]
-      if b then
-        b.JUI_ranged = true          -- marks the buttons this module owns
-        rangeButtons[#rangeButtons + 1] = b
-        local parent = b:GetParent()
-        local group = byParent[parent or b]
-        if not group then
-          group = { parent = parent, n = 0 }
-          byParent[parent or b] = group
-          rangeGroups[#rangeGroups + 1] = group
-        end
-        group.n = group.n + 1
-        group[group.n] = b
-      end
-    end
-  end
-  return rangeButtons
-end
-
-local function RangeGroups()
-  if not rangeGroups then RangeList() end
-  return rangeGroups
-end
-
-
-local function ApplyRangeTint(b, oor)
-  local icon = ButtonIcon(b)
-  if not icon then return end
-  if oor then
-    icon:SetVertexColor(RANGE_R, RANGE_G, RANGE_B)
-  elseif ActionButton_UpdateUsable then
-    -- Hand the colour back to Blizzard so usable/unusable/mana stays correct.
-    ActionButton_UpdateUsable(b)
-  else
-    icon:SetVertexColor(1, 1, 1)
-  end
-end
-
--- Blizzard repaints the icon on its own (usable, mana, action change) and would
--- wipe the red. This hook only re-applies the cached flag: no API call, and it
--- never touches buttons this module does not own.
-local function UpdateRangeTint(self)
-  if not self or not self.JUI_ranged or not self.JUI_oor then return end
-  local icon = ButtonIcon(self)
-  if icon then icon:SetVertexColor(RANGE_R, RANGE_G, RANGE_B) end
-end
-
-local function ClearRangeTints()
-  local list = RangeList()
-  for i = 1, #list do
-    local b = list[i]
-    if b.JUI_oor then
-      b.JUI_oor = nil
-      ApplyRangeTint(b, false)
-    end
-  end
-  -- Keep the per-bar "has tinted buttons" counters in sync with the flags we
-  -- just dropped, so the sweep may skip hidden bars again.
-  if rangeGroups then
-    for g = 1, #rangeGroups do rangeGroups[g].tinted = 0 end
-  end
-end
-
-local rangeTicker = CreateFrame("Frame")
-rangeTicker:Hide()
-rangeTicker.elapsed = 0
-rangeTicker:SetScript("OnUpdate", function(self, elapsed)
-  self.elapsed = self.elapsed + elapsed
-  if self.elapsed < 0.2 then return end
-  self.elapsed = 0
-  if not UnitExists("target") then
-    ClearRangeTints()
-    self:Hide()
-    return
-  end
-  local groups = RangeGroups()
-  for g = 1, #groups do
-    local group = groups[g]
-    local parent = group.parent
-    -- One parent-chain walk per bar. With the bar itself visible, a button's
-    -- IsShown() is identical to its IsVisible(), and it is only a flag read.
-    local barVisible = (not parent) or parent:IsVisible()
-    -- A hidden bar with nothing tinted has no work at all: skipping the whole
-    -- group here removes 12 table/flag reads per hidden bar, five times a
-    -- second, for the entire time a target exists.
-    if barVisible or (group.tinted or 0) > 0 then
-      local tinted = 0
-      for i = 1, group.n do
-        local b = group[i]
-        local action = b.action
-        -- HasAction skips empty slots: cheap local checks that keep
-        -- IsActionInRange off the buttons that could never tint anyway.
-        if action and barVisible and b:IsShown() and HasAction(action) then
-          local oor = (IsActionInRange(action) == 0) or false
-          if oor ~= (b.JUI_oor or false) then
-            b.JUI_oor = oor or nil
-            ApplyRangeTint(b, oor)
-          end
-          if oor then tinted = tinted + 1 end
-        elseif b.JUI_oor then
-          -- Slot went empty or its bar was hidden while tinted: drop the flag so
-          -- a later action in that slot starts from a clean colour.
-          b.JUI_oor = nil
-          ApplyRangeTint(b, false)
-        end
-      end
-      group.tinted = tinted
-    end
-  end
-
-
-end)
-
-local function RefreshRangeAll()
-  if UnitExists("target") then
-    rangeTicker.elapsed = 1
-    rangeTicker:Show()
-  else
-    ClearRangeTints()
-    rangeTicker:Hide()
-  end
-end
+-- NOTE (range check): there is deliberately no range code in this module.
+-- Blizzard's ActionButton_OnUpdate already range-checks every shown button and
+-- paints the hotkey label red whether or not this addon is loaded. Bar 1 uses
+-- Blizzard's own hotkey string so the native indicator shows up there too.
 
 
 -- Persistent slot art. Blizzard hides empty secure buttons in several states
@@ -762,7 +493,6 @@ function J:ApplyBarBackground()
   for _, p in pairs(J.barPanels) do
     if on and p.JUI_used then p:Show() else p:Hide() end
   end
-  if J.ReapplyBarAlpha then J.ReapplyBarAlpha() end
 end
 
 
@@ -794,7 +524,9 @@ local function PlaceGrid(buttons, anchor, relPoint, x, y, perRow, size, dir)
   end
 end
 
--- 7 -- Bar1 slot row and keybinds ---------------------------------------------
+-- ---------------------------------------------------------------------------
+-- 7. Bar1 slot row and keybinds
+-- ---------------------------------------------------------------------------
 -- Bar 1 is special in 3.3.5: Blizzard swaps the normal ActionButtons for
 -- BonusActionButtons in stances/stealth and hides every empty secure button, so
 -- a backdrop parented to either set disappears with it. This permanent,
@@ -810,20 +542,8 @@ local function PlaceBar1Slots()
     if not slot then
       slot = NewSlotFrame(holder, "LOW", 1)
 
-      local keyLayer = CreateFrame("Frame", nil, holder)
-      keyLayer:EnableMouse(false)
-      keyLayer:SetFrameStrata("HIGH")
-      keyLayer:SetFrameLevel(20)
-
-      local key = keyLayer:CreateFontString(nil, "OVERLAY")
-      key:SetFont(J.font, 11, "OUTLINE")
-      key:SetJustifyH("RIGHT")
-      key:SetShadowOffset(0, 0)
-      key:SetTextColor(0.6, 0.6, 0.6)
-      key:SetPoint("TOPRIGHT", keyLayer, "TOPRIGHT", -2, -2)
-
-      slot.key = key
-      slot.keyLayer = keyLayer
+      -- No own keybind label any more: Blizzard's own hotkey string is used on
+      -- bar 1 as well, so its native red out-of-range colouring shows up.
       J.bar1Slots[i] = slot
     end
 
@@ -831,33 +551,21 @@ local function PlaceBar1Slots()
     slot:SetPoint("BOTTOMLEFT", holder, "BOTTOMLEFT",
       (J.bar1X or 0) + (i - 1) * (size + GAP), J.bar1Y or 0)
     slot:SetSize(size, size)
-    slot.keyLayer:ClearAllPoints()
-    slot.keyLayer:SetAllPoints(slot)
-    slot.keyLayer:Show()
     slot:Show()
   end
 
   J:RefreshBar1Keys()
 end
 
+-- Blizzard rewrites the raw binding text on UPDATE_BINDINGS without running
+-- ActionButton_Update, so the shortened form is re-applied here. Event driven
+-- only - never on a timer.
 function J:RefreshBar1Keys()
-  local slots = J.bar1Slots
-  if not slots then return end
-  for i = 1, 12 do
-    local slot = slots[i]
-    if slot and slot.key then
-      -- Read Blizzard's already formatted label so modifier names and
-      -- server-specific abbreviations match every other bar.
-      local native = _G["ActionButton" .. i .. "HotKey"]
-      local text = native and native:GetText()
-      if not text or text == "" then
-        local binding = GetBindingKey("ACTIONBUTTON" .. i)
-        text = binding and GetBindingText(binding, "KEY_", 1) or ""
-      end
-      -- Write the shortened form straight away; the raw label must never be
-      -- rendered, not even for one frame.
-      slot.key:SetText(J:AbbrevKey(text))
-      J:ShortenHotkey(slot.key, slot)
+  for _, prefix in ipairs({ "ActionButton", "BonusActionButton" }) do
+    for i = 1, 12 do
+      local b = _G[prefix .. i]
+      local hotkey = b and _G[prefix .. i .. "HotKey"]
+      if hotkey then J:ShortenHotkey(hotkey, b) end
     end
   end
 end
@@ -892,7 +600,9 @@ local function SetupBar1Visibility()
   state.bar1Driven = true
 end
 
--- 8 -- Micro menu -------------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- 8. Micro menu
+-- ---------------------------------------------------------------------------
 -- Custom servers (Ascension and friends) add micro buttons that are not in
 -- MICRO_BUTTONS. Any global button whose name ends in "MicroButton" is picked
 -- up too. Scanning the whole global table is expensive, so it runs once per
@@ -984,7 +694,9 @@ local function SetupMicroMenu()
   end
 end
 
--- 9 -- Stance bar -------------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- 9. Stance bar
+-- ---------------------------------------------------------------------------
 -- Vertical column flush against the right side bars. Blizzard calls
 -- ShapeshiftBar_Update very often (form, usable and cooldown updates), so the
 -- placement work is skipped unless the mode or the number of forms changed.
@@ -992,126 +704,23 @@ end
 -- client that pass can leave a scale on ShapeshiftBarFrame. The buttons are its
 -- children, so a stray scale is exactly what makes the whole column balloon.
 -- Scale/alpha are not protected calls, so this stays safe inside lockdown.
+-- The same pass also re-asserts the button edge. A foreign layout can set an
+-- absurd width/height instead of a scale, which balloons a single button over
+-- half the screen. SetWidth/SetHeight are not protected either, so this is safe
+-- in lockdown as well; both are only written when the value actually drifted.
 local function NormalizeStanceFrame()
   local f = ShapeshiftBarFrame
   if not f then return end
   if f.GetScale and f:GetScale() ~= 1 then f:SetScale(1) end
   for i = 1, 10 do
     local b = _G["ShapeshiftButton" .. i]
-    if b and b.GetScale and b:GetScale() ~= 1 then b:SetScale(1) end
-  end
-end
-
--- 10b -- Mouseover show/hide -------------------------------------------------
--- One global alpha for every action bar (main block, pet row, stance column and
--- the plates/slots behind them). Detection is a single 10 Hz poll that only
--- exists while the option is on; nothing runs when it is off. No fade -- on/off only.
-local barAlphaTicker
-local barMouseoverShown = true
-
-local function ForEachBarFrame(fn)
-  for _, prefix in ipairs(BAR_PREFIXES) do
-    for i = 1, 12 do
-      local b = _G[prefix .. i]
-      if b then fn(b) end
+    if b then
+      if b.GetScale and b:GetScale() ~= 1 then b:SetScale(1) end
+      if b.GetWidth and floor(b:GetWidth() + 0.5) ~= BASESIZE then b:SetWidth(BASESIZE) end
+      if b.GetHeight and floor(b:GetHeight() + 0.5) ~= BASESIZE then b:SetHeight(BASESIZE) end
     end
   end
-  for i = 1, 10 do
-    local p = _G["PetActionButton" .. i]
-    if p then fn(p) end
-    local s = _G["ShapeshiftButton" .. i]
-    if s then fn(s) end
-  end
-  if state.slotPool then
-    for _, s in ipairs(state.slotPool) do fn(s) end
-  end
-  if J.bar1Slots then
-    for i = 1, 12 do
-      local s = J.bar1Slots[i]
-      if s then
-        fn(s)
-        if s.keyLayer then fn(s.keyLayer) end
-      end
-    end
-  end
-  if J.barPanels then
-    for _, p in pairs(J.barPanels) do fn(p) end
-  end
 end
-
-local function SetBarAlpha(a)
-  ForEachBarFrame(function(f)
-    if f.SetAlpha then f:SetAlpha(a) end
-  end)
-end
-
--- Re-applied after any pass that resets alpha on the secure buttons.
-local function ReapplyBarAlpha()
-  if J.db and J.db.barMouseover then SetBarAlpha(barMouseoverShown and 1 or 0) end
-end
-J.ReapplyBarAlpha = ReapplyBarAlpha
-
-local function MouseOverBars()
-  if J.barHolder and MouseIsOver(J.barHolder) then return true end
-  if J.barPanels then
-    for _, p in pairs(J.barPanels) do
-      if p:IsShown() and MouseIsOver(p) then return true end
-    end
-  end
-  -- The ten pet buttons are only worth walking when the pet bar is actually up;
-  -- otherwise this was ten IsVisible + MouseIsOver calls per tick for nothing.
-  local petBar = PetActionBarFrame
-  if (not petBar) or petBar:IsVisible() then
-    for i = 1, 10 do
-      local p = _G["PetActionButton" .. i]
-      if p and p:IsVisible() and MouseIsOver(p) then return true end
-    end
-  end
-  return false
-end
-
-local function MouseoverTick(self, elapsed)
-  self.t = (self.t or 0) + elapsed
-  if self.t < 0.1 then return end
-  self.t = 0
-
-  -- A stationary cursor cannot change the answer. Two cursor reads are far
-  -- cheaper than the MouseIsOver sweep, and a full check is still forced twice
-  -- a second so a bar that shows/moves under a parked cursor is picked up.
-  local cx, cy = GetCursorPosition()
-  local now = GetTime()
-  if cx == self.cx and cy == self.cy and now - (self.full or 0) < 0.5 then return end
-  self.cx, self.cy = cx, cy
-  self.full = now
-
-  local want = MouseOverBars()
-  if want == barMouseoverShown then return end
-  barMouseoverShown = want
-  SetBarAlpha(want and 1 or 0)
-end
-
-
-function J:ApplyBarMouseover()
-  local on = J.db and J.db.barMouseover and true or false
-  if not barAlphaTicker then
-    barAlphaTicker = CreateFrame("Frame")
-    barAlphaTicker:Hide()
-  end
-  if not on then
-    barAlphaTicker:SetScript("OnUpdate", nil)
-    barAlphaTicker:Hide()
-    barMouseoverShown = true
-    SetBarAlpha(1)
-    return
-  end
-  barMouseoverShown = MouseOverBars()
-  SetBarAlpha(barMouseoverShown and 1 or 0)
-  barAlphaTicker.t = 0
-  barAlphaTicker:SetScript("OnUpdate", MouseoverTick)
-  barAlphaTicker:Show()
-end
-
-
 
 -- Cheap fingerprint of the anchor the bar currently carries. Blizzard's own
 -- login pass (and UIParent_ManageFramePositions) can re-anchor or re-scale the
@@ -1131,6 +740,11 @@ local function StanceGeomSig()
   return tostring(p) .. ":" .. relName .. ":" .. tostring(rp) .. ":"
     .. tostring(x and floor(x + 0.5)) .. ":" .. tostring(y and floor(y + 0.5))
     .. ":" .. tostring(s) .. ":" .. tostring(fs)
+    -- Size is part of the fingerprint: a foreign resize leaves the anchor and
+    -- the scale untouched, so without this the settle pass would never notice
+    -- a ballooned button and the bar stayed broken until a forced pass.
+    .. ":" .. tostring(b.GetWidth and floor(b:GetWidth() + 0.5))
+    .. ":" .. tostring(b.GetHeight and floor(b:GetHeight() + 0.5))
 end
 
 local function PlaceStanceBar(used, force)
@@ -1197,7 +811,6 @@ local function PlaceStanceBar(used, force)
   -- Recorded after the placement so the fingerprint describes our own final
   -- geometry. Any later foreign move/scale changes it and unlocks one pass.
   state.stanceSig = tostring(mode) .. ":" .. numForms .. ":" .. StanceGeomSig()
-  ReapplyBarAlpha()
   return true
 
 end
@@ -1208,7 +821,7 @@ J.PlaceStanceBar = PlaceStanceBar
 -- be overwritten. This driver re-checks a handful of times over the first few
 -- seconds and then hides itself for good: no OnUpdate remains during play, and
 -- each check is a signature compare that only re-places when something drifted.
-local STANCE_SETTLE = { 0.1, 0.4, 1.0, 2.0, 4.0 }
+local STANCE_SETTLE = { 0.1, 0.4, 1.0, 2.0, 4.0, 6.0 }
 local stanceSettle
 local function StartStanceSettle()
   if not (J.db and J.db.stanceBar) then return end
@@ -1241,7 +854,9 @@ end
 J.StartStanceSettle = StartStanceSettle
 
 
--- 10 -- Pet bar ---------------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- 10. Pet bar
+-- ---------------------------------------------------------------------------
 -- PetActionBarFrame is a sliding bar that re-points itself while it animates,
 -- which pulled the row apart. The buttons keep their original parent (Blizzard
 -- still owns their visibility) but anchor to our bar holder, which never moves.
@@ -1264,15 +879,25 @@ local function PlacePetBar()
       b:SetFrameLevel(5)
     end
   end
-  ReapplyBarAlpha()
 end
 
 
--- 11 -- Layout engine ---------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- 11. Layout engine
+-- ---------------------------------------------------------------------------
 local function CurrentMode()
   local m = J.db and J.db.barLayout
   if m == "three" or m == "triple" or m == "tripleHigh" or m == "sebby" then return m end
   return "one"
+end
+
+-- Size slider: 100 / 90 / 80 / 70 percent of the reference button edge. The
+-- value is resolved once per layout pass; nothing reads the database per frame.
+local function ApplyBarScale()
+  local pct = tonumber(J.db and J.db.barScale) or 100
+  if pct ~= 90 and pct ~= 80 and pct ~= 70 then pct = 100 end
+  BASESIZE = floor(BASE_BUTTON * pct / 100 + 0.5)
+  PETSIZE  = floor(BASE_PET * pct / 100 + 0.5)
 end
 
 local function ApplyLayout()
@@ -1281,7 +906,9 @@ local function ApplyLayout()
     return
   end
   state.layoutPending = false
+  ApplyBarScale()
   HideAllSlots()
+
 
   local mode = CurrentMode()
   local isTriple = (mode == "triple" or mode == "tripleHigh" or mode == "sebby")
@@ -1451,12 +1078,13 @@ local function ApplyLayout()
 
   HideUnusedPanels(used)
   SkinAll()
-  ReapplyBarAlpha()
 end
 
 J.ApplyBarLayout = ApplyLayout
 
--- 12 -- Totem bar -------------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- 12. Totem bar
+-- ---------------------------------------------------------------------------
 -- Pinned through its own state events. No SetPoint hooks: competing anchor
 -- hooks can form an expensive loop. Placement is fully free; the only rule is
 -- that the bar stays on screen.
@@ -1542,7 +1170,9 @@ local function LockTotemBar()
 end
 J.LockTotemBar = LockTotemBar
 
--- 13 -- Init ------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- 13. Init
+-- ---------------------------------------------------------------------------
 -- The first stance change and the first spell drag of a session used to stall
 -- the client: Blizzard creates the bonus page icons, the stance button art, the
 -- empty-slot grid artwork and our backdrops in one single frame. All of it is
@@ -1726,14 +1356,6 @@ J:AddModule(function()
     -- so this single hook covers action, page and grid changes without
     -- skinning every button twice on the first drag of a session.
     hooksecurefunc("ActionButton_Update", SkinButton)
-    -- Range tint: piggybacks on Blizzard's own usable refresh (see above).
-    if ActionButton_UpdateUsable then
-      hooksecurefunc("ActionButton_UpdateUsable", UpdateRangeTint)
-      local rangeEvents = CreateFrame("Frame")
-      rangeEvents:RegisterEvent("PLAYER_TARGET_CHANGED")
-      rangeEvents:RegisterEvent("PLAYER_ENTERING_WORLD")
-      rangeEvents:SetScript("OnEvent", RefreshRangeAll)
-    end
     if ShapeshiftBar_Update then
       hooksecurefunc("ShapeshiftBar_Update", function()
         if J.db and J.db.stanceBar then PlaceStanceBar() end
@@ -1741,10 +1363,8 @@ J:AddModule(function()
     end
   end
 
-  J.ApplyCooldownText()
   J.ApplyMacroText()
   ApplyKeyPressDown()
-  J:ApplyBarMouseover()
 
 end)
 

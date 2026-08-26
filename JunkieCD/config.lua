@@ -1,5 +1,22 @@
--- /jcd settings panel. Same flat JunkieUI theme so it can be merged into the
--- /jui panel as an extra tab later on.
+--[[---------------------------------------------------------------------------
+  JunkieCD - Settings panel (/jcd)
+
+  Same flat JunkieUI theme so it can be merged into the /jui panel as an extra
+  tab later on. Contains the layout canvas, the tracker editors and the
+  live-preview drivers.
+
+  Cost: nothing in this file runs while the panel is closed. The animation and
+  live-preview OnUpdates exist only for the open panel and stop with it.
+
+  Sections:
+    1. Icon grid
+    2. Per icon settings
+    3. Icon grids
+    4. Smooth motion
+    5. Serialization
+    6. Canvas helpers
+    7. Panel
+-------------------------------------------------------------------------------]]
 local C = JunkieCD
 
 local panel
@@ -494,7 +511,9 @@ end
 
 
 
--- Icon grid ------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- 1. Icon grid
+-- ---------------------------------------------------------------------------
 local GLOW_OPTIONS = C.GLOW_TYPES
 local SOUND_OPTIONS = C.SOUNDS
 
@@ -517,6 +536,7 @@ local UNIT_OPTIONS = {
   { key = "player", name = "Player", tag = "P" },
   { key = "target", name = "Target", tag = "T" },
   { key = "pet", name = "Pet", tag = "E" },
+  { key = "focus", name = "Focus", tag = "F" },
 }
 
 local MODE_OPTIONS = {
@@ -544,6 +564,8 @@ local function NormalizeAura(entry)
     entry.filter = entry.filter or "debuff"
   elseif entry.unit == "pet" then
     entry.filter = entry.filter or "buff"
+  elseif entry.unit == "focus" then
+    entry.filter = entry.filter or "debuff"
   end
   entry.glow = entry.glow or "none"
   -- One of the two states is always active: found is the default.
@@ -566,7 +588,9 @@ local function UnitInfo(key)
   return UNIT_OPTIONS[1]
 end
 
--- Per icon settings ------------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- 2. Per icon settings
+-- ---------------------------------------------------------------------------
 -- One popup for both cooldowns and auras, opened by clicking the icon itself.
 -- It never writes to anything except the single icon it was opened from: the
 -- icon is looked up again by its own uid on every read and every write, so two
@@ -954,14 +978,18 @@ local function CloseIconSettings()
 end
 
 
--- Icon grids -------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- 3. Icon grids
+-- ---------------------------------------------------------------------------
 -- A grid is driven by a "bag": the stored array plus how to write its count.
 -- There are no sliders any more. The row always shows the filled icons plus one
 -- empty "+" placeholder, and the stored count follows the filled icons, so a
 -- removed icon makes the row collapse to the left both here and on screen.
 local dragging   -- { bag = bag, index = n }
 
--- Smooth motion --------------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- 4. Smooth motion
+-- ---------------------------------------------------------------------------
 -- Slots only ever glide when the player actually changed the layout (dropped,
 -- added or removed an icon). Every other refresh snaps them into place so the
 -- grid never drifts around while other settings are being touched.
@@ -1436,7 +1464,9 @@ end
 
 
 
--- Serialization ----------------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- 5. Serialization
+-- ---------------------------------------------------------------------------
 local function Serialize(v, indent)
   local t = type(v)
   if t == "number" then return tostring(v) end
@@ -1477,7 +1507,9 @@ function C:ImportProfile(str)
   return true, name
 end
 
--- Canvas helpers ---------------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- 6. Canvas helpers
+-- ---------------------------------------------------------------------------
 local function CanvasOptions()
   local out = { { key = -1, name = "Base canvas (no form)" } }
   for f = 0, C:StanceCount() do
@@ -1558,7 +1590,9 @@ local function ImportCanvasRow(kind)
   print("|cffde7230JunkieCD|r " .. (kind == "main" and "main" or "secondary") .. " canvas imported.")
 end
 
--- Panel ------------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- 7. Panel
+-- ---------------------------------------------------------------------------
 -- The panel is hosted inside the JunkieUI settings window: JunkieUI hands us
 -- a frame and we fill it. There is no standalone JunkieCD window.
 local function HidePanel()
@@ -2395,10 +2429,7 @@ local function BuildPanel(host)
   y = y - 40
 
   Header(ge, "Text", y); y = y - 30
-  MakeCheck(ge, "Show the timer number on icons", y,
-    function() return C.db.cooldownText end,
-    function(v) C.db.cooldownText = v; C:Rebuild() end)
-  y = y - 40
+  Hint(ge, "For cooldown text, use OmniCC.", y); y = y - 30
 
   -- The castbar switch lives on the castbar element in the canvas now.
 
@@ -2536,10 +2567,9 @@ local function BuildPanel(host)
   importSub:SetPoint("LEFT", copySub, "RIGHT", 6, 0)
   y = y - 44
 
-  MakeCheck(cd, "Show the global cooldown (1.5s) on the icons", y,
-    function() return C:Profile().showGCD end,
-    function(v) C:Profile().showGCD = v; C:UpdateCooldowns() end)
+  -- The global cooldown swipe is always drawn; the old toggle was removed.
   PageOK(cd)
+
 
   -- Page 6: unitframe bars ------------------------------------------------------
   local uf = pages[6]

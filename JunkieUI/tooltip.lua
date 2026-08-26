@@ -1,37 +1,29 @@
--- Tooltip: fixed anchor or mouse follow
+--[[---------------------------------------------------------------------------
+  JunkieUI - Tooltip
+
+  A single draggable anchor frame that GameTooltip is parked on. The old
+  mouse-follow mode was removed: it needed a 40Hz OnUpdate for no real gain.
+
+  Cost: no loops. The anchor is repositioned only when the tooltip is shown or
+  the user drags the anchor.
+
+  Sections:
+    1. Spell / aura IDs
+-------------------------------------------------------------------------------]]
 local J = JunkieUI
 
 local anchor
-local lastCursorX, lastCursorY
 
 local function Position()
   if not J.db then return end
-  if J.db.tooltipMouse then return end
   GameTooltip:ClearAllPoints()
   GameTooltip:SetPoint("BOTTOMRIGHT", anchor, "BOTTOMRIGHT", 0, 0)
 end
 
-local function FollowMouse()
-  local scale = UIParent:GetEffectiveScale()
-  local x, y = GetCursorPosition()
-  x, y = x / scale, y / scale
-  if x == lastCursorX and y == lastCursorY then return end
-  lastCursorX, lastCursorY = x, y
-  GameTooltip:ClearAllPoints()
-  GameTooltip:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", x + 18, y + 18)
-end
-
 local function DefaultAnchor(tooltip, parent)
   if not J.db then return end
-  if J.db.tooltipMouse then
-    tooltip:SetOwner(parent, "ANCHOR_NONE")
-    tooltip.jFollow = true
-    FollowMouse()
-  else
-    tooltip:SetOwner(parent, "ANCHOR_NONE")
-    tooltip.jFollow = nil
-    Position()
-  end
+  tooltip:SetOwner(parent, "ANCHOR_NONE")
+  Position()
 end
 
 local function CreateAnchor()
@@ -76,7 +68,9 @@ function J:SetTooltipAnchorUnlocked(v)
   if v then anchor:Show() else anchor:Hide() end
 end
 
--- Spell / aura IDs ---------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- 1. Spell / aura IDs
+-- ---------------------------------------------------------------------------
 -- Cache the left-hand font strings per tooltip so the safety scan below does
 -- not build a new global lookup string for every line on every mouseover.
 local lineCache = {}
@@ -207,18 +201,4 @@ J:AddModule(function()
 
 
   hooksecurefunc("GameTooltip_SetDefaultAnchor", DefaultAnchor)
-
-  GameTooltip:HookScript("OnUpdate", function(self, elapsed)
-    if not self.jFollow or not J.db.tooltipMouse then return end
-    self.jFollowElapsed = (self.jFollowElapsed or 0) + (elapsed or 0)
-    if self.jFollowElapsed < 0.025 then return end
-    self.jFollowElapsed = 0
-    FollowMouse()
-  end)
-
-  GameTooltip:HookScript("OnHide", function(self)
-    self.jFollow = nil
-    self.jFollowElapsed = nil
-    lastCursorX, lastCursorY = nil, nil
-  end)
 end)

@@ -1,7 +1,7 @@
 ## Interface: 30300
 ## Title: Junkie UI |cff9d9d9dFeatherlight|r
 ## Notes: Plug and play lightweight UI. No profiles, no fuss. /jui
-## Version: 2.5.2
+## Version: 3.0.0
 ## Author: Junkie
 ## SavedVariables: JunkieUIDB
 
@@ -13,7 +13,7 @@ xp.lua
 actionbars.lua
 unitframes.lua
 castbars.lua
-playerauras.lua
+blizzbuffs.lua
 chat.lua
 loot.lua
 tooltip.lua

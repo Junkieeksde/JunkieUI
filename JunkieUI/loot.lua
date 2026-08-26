@@ -8,7 +8,9 @@
 
 local J = JunkieUI
 
--- Upvalues and constants ------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- 1. Upvalues and constants
+-- ---------------------------------------------------------------------------
 local _G = _G
 local CreateFrame = CreateFrame
 local hooksecurefunc = hooksecurefunc

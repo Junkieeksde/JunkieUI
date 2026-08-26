@@ -1,4 +1,12 @@
--- Custom XP bar: 5px, full width, top of screen
+--[[---------------------------------------------------------------------------
+  JunkieUI - XP / reputation bar
+
+  A 5px full-width bar at the top of the screen. Blizzard's XP and reputation
+  bars are reparented to a hidden frame rather than having Show() replaced:
+  they belong to MainMenuBar, and a replaced method would taint the actionbars.
+
+  Cost: event driven only (XP, reputation, level up).
+-------------------------------------------------------------------------------]]
 local J = JunkieUI
 
 local HEIGHT = 5

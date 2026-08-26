@@ -51,12 +51,10 @@ local InCombatLockdown  = InCombatLockdown
 local GetTime           = GetTime
 local floor             = math.floor
 local ceil              = math.ceil
-local format            = string.format
 local strlen            = string.len
 local strsub            = string.sub
 
 local tonumber          = tonumber
-local ipairs            = ipairs
 local pairs             = pairs
 
 local W, H = 250, 40
@@ -193,8 +191,10 @@ end
 -- ---------------------------------------------------------------------------
 -- 4. Shared 0.25s ticker
 -- ---------------------------------------------------------------------------
--- One OnUpdate for countdown text and the short pet retry burst only. Unit,
--- target and aura state changes are handled exclusively by events.
+-- The only recurring loop in this module. It polls target-of-target while a
+-- target exists and drives the short pet retry burst; everything else (unit
+-- values, target changes, auras) is event driven. It hides itself the moment
+-- neither of those two jobs has work left.
 
 local ticker = CreateFrame("Frame")
 ticker:Hide()
@@ -251,17 +251,19 @@ function UpdateHealthBar(f)
 
 
   local style = f.JUI_style
-  if style == "player" or style == "target" then
+  if style == "player" or style == "target" or style == "focus" then
     local pct = floor(cur / max * 100 + 0.5)
     if f.JUI_shownHP ~= cur or f.JUI_shownPct ~= pct then
       f.JUI_shownHP, f.JUI_shownPct = cur, pct
-      if style == "player" then
-        f.right:SetText(J:Short(cur) .. " - " .. pct .. "%")
-      else
+      if style == "target" then
         f.left:SetText(pct .. "% - " .. J:Short(cur))
+      else
+        -- player and focus share the same layout: name left, health right.
+        f.right:SetText(J:Short(cur) .. " - " .. pct .. "%")
       end
     end
   end
+
 end
 
 function UpdatePower(f)
@@ -307,18 +309,18 @@ function UpdateName(f)
   local unit = f.unit
   local style = f.JUI_style
   local name = UnitName(unit) or ""
-  if style == "target" and strlen(name) > 15 then
+  if (style == "target" or style == "focus") and strlen(name) > 15 then
     name = strsub(name, 1, 15)
   elseif (style == "tot" or style == "pet") and strlen(name) > 10 then
     name = strsub(name, 1, 10)
   end
-  if style == "target" then
+  if style == "target" or style == "focus" then
     name = name .. ClassificationTag(unit)
   end
   -- Same caching rationale as the health text above.
   if f.JUI_shownName == name then return end
   f.JUI_shownName = name
-  if style == "player" then
+  if style == "player" or style == "focus" then
     f.left:SetText(name)
   elseif style == "target" then
     f.right:SetText(name)
@@ -326,6 +328,7 @@ function UpdateName(f)
     f.center:SetText(name)
   end
 end
+
 
 -- Raid mark (top center) + leader crown (top left)
 -- Both states are change-cached: target-of-target polls this four times a
@@ -384,41 +387,37 @@ local function SetPowerShown(self, show)
   end
 end
 
--- Right-click menu: Blizzard's stock UnitPopup dropdown.
--- Blizzard re-evaluates the whole entry list (UnitPopup_HideButtons + every
--- button's enable state) on every single frame while the list is open, which
--- shows up as a stutter when moving the mouse over the entries. Throttling
--- that refresh to 5x/sec keeps the menu correct but removes the frame drops.
-do
-  local origOnUpdate = UnitPopup_OnUpdate
-  if type(origOnUpdate) == "function" then
-    local acc = 0
-    UnitPopup_OnUpdate = function(elapsed)
-      acc = acc + (elapsed or 0)
-      if acc < 0.2 then return end
-      acc = 0
-      return origOnUpdate(elapsed)
-    end
-  end
-end
-
-local MENU_DROPDOWN = {
-  player = "PlayerFrameDropDown",
-  target = "TargetFrameDropDown",
-  targettarget = "TargetFrameDropDown",
-  focus = "FocusFrameDropDown",
-  pet = "PetFrameDropDown",
+-- A dropdown opened by addon Lua becomes tainted before its protected
+-- "Set Focus" entry runs on this 3.3.5 client. Forward right-click through
+-- SecureActionButton's protected "click" action to Blizzard's own unit button
+-- instead. Blizzard then opens and executes its menu without an addon callback
+-- anywhere in the protected path.
+local STOCK_UNIT_BUTTON = {
+  player = "PlayerFrame",
+  target = "TargetFrame",
+  targettarget = "TargetFrameToT",
+  focus = "FocusFrame",
+  pet = "PetFrame",
 }
 
-local function UnitMenu(self)
-  local dd = _G[MENU_DROPDOWN[self.unit or ""] or ""]
-  if not dd then return end
-  HideDropDownMenu(1)
-  ToggleDropDownMenu(1, nil, dd, "cursor", 0, 0)
+-- Mouseover tooltip (target and focus frames only). Pure event scripts: they
+-- run on enter/leave, never per frame, so they cost nothing while idle. The
+-- anchor goes through GameTooltip_SetDefaultAnchor, which tooltip.lua already
+-- hooks, so the tooltip lands wherever the user chose in the settings.
+local function UnitTooltipEnter(self)
+  local unit = self.unit
+  if not unit or not UnitExists(unit) then return end
+  GameTooltip:SetOwner(self, "ANCHOR_NONE")
+  if GameTooltip_SetDefaultAnchor then
+    GameTooltip_SetDefaultAnchor(GameTooltip, self)
+  else
+    GameTooltip:SetPoint("BOTTOMLEFT", self, "TOPLEFT", 0, 4)
+  end
+  GameTooltip:SetUnit(unit)
+  GameTooltip:Show()
 end
 
-
-
+local function UnitTooltipLeave() GameTooltip:Hide() end
 
 local function CreateUnitFrame(name, unit, w, h, style)
   local f = CreateFrame("Button", name, UIParent, "SecureUnitButtonTemplate")
@@ -429,10 +428,34 @@ local function CreateUnitFrame(name, unit, w, h, style)
 
   f:SetAttribute("unit", unit)
   f:SetAttribute("*type1", "target")
-  f:SetAttribute("*type2", "menu")
-  f.menu = UnitMenu
+  local stockButton = _G[STOCK_UNIT_BUTTON[unit or ""]]
+  if stockButton then
+    f:SetAttribute("*type2", "click")
+    -- Set both forms for compatibility with the client's modified-attribute
+    -- resolver. They point to the same secure Blizzard button.
+    f:SetAttribute("clickbutton2", stockButton)
+    f:SetAttribute("*clickbutton2", stockButton)
+  end
   f:RegisterForClicks("AnyUp")
+
+  -- The protected click must finish before addon code touches the dropdown.
+  -- Repositioning the already-built list in PostClick is purely cosmetic and
+  -- does not enter or modify Blizzard's protected Set Focus execution path.
+  f:HookScript("PostClick", function(self, button)
+    if button ~= "RightButton" then return end
+    local list = _G["DropDownList1"]
+    if not list or not list:IsShown() then return end
+    list:ClearAllPoints()
+    list:SetPoint("TOPLEFT", self, "TOPRIGHT", 4, 0)
+  end)
   RegisterUnitWatch(f)
+
+  if style == "target" or style == "focus" then
+    f:SetScript("OnEnter", UnitTooltipEnter)
+    f:SetScript("OnLeave", UnitTooltipLeave)
+  end
+
+
 
   local health = CreateFrame("StatusBar", nil, f)
   health:SetPoint("TOPLEFT", f, 1, -1)
@@ -497,7 +520,7 @@ local function CreateUnitFrame(name, unit, w, h, style)
 end
 
 -- ---------------------------------------------------------------------------
--- 7. Aura groups
+-- 7. Target aura rows
 -- ---------------------------------------------------------------------------
 -- Target aura row builder. Each group uses its own holder whose left edge is
 -- hard-anchored to the target frame, so aura data can never shift the grid.
@@ -574,9 +597,6 @@ local function CreateAuraGroup(anchorFrame, count, size, gap, frameGap, dir, fir
 
     b.count = J:Text(b, 11, "RIGHT")
     b.count:SetPoint("BOTTOMRIGHT", -1, 1)
-    b.time = J:Text(b, 11, "CENTER")
-    b.time:SetPoint("CENTER", b, "CENTER", 0, 0)
-    b.time:SetParent(cd)
 
     -- Mouseover tooltip for target buffs / debuffs
     b:EnableMouse(true)
@@ -599,7 +619,7 @@ local function SetAuraButton(b, icon, count, duration, expires)
     b.count:SetText(c)
     b.JUI_shownCount = c
   end
-  b.JUI_expires, b.JUI_duration = expires, duration
+  b.JUI_cleared = nil
   -- SetCooldown restarts the swipe animation on every call, and the aura block
   -- is repainted on every UNIT_AURA. The same pair is therefore written once.
   if duration and duration > 0 and expires and expires > 0 then
@@ -614,18 +634,19 @@ local function SetAuraButton(b, icon, count, duration, expires)
     if b.cd:IsShown() then b.cd:Hide() end
   end
 
-  b:Show()
+  if not b.JUI_visible then
+    b.JUI_visible = true
+    b:Show()
+  end
 end
 
 local function ClearAuraButton(b)
+  -- Already empty: nothing on screen changes, so skip the whole write set.
+  if b.JUI_cleared then return end
+  b.JUI_cleared = true
   b.JUI_auraIndex = nil
-  b.JUI_expires, b.JUI_duration = nil, nil
   b.JUI_cdStart, b.JUI_cdDur = nil, nil
-
-  if b.JUI_shownTime ~= "" then
-    b.JUI_shownTime = ""
-    b.time:SetText("")
-  end
+  b.JUI_visible = nil
   b:Hide()
 end
 
@@ -645,37 +666,41 @@ local function UpdateAuraGroup(group, unit, filter)
       SetAuraButton(b, icon, cnt, duration, expires)
     end
   end
-  for i = shown + 1, total do
+  -- Only the buttons that were in use last pass can still be showing an icon;
+  -- everything above that is already hidden, so the sweep stops there.
+  for i = shown + 1, (group.used or total) do
     ClearAuraButton(buttons[i])
   end
   group.used = shown
   return shown
 end
 
--- Only the player's own debuffs on the target. Blizzard's C-side "PLAYER"
--- filter does the ownership test inside the client, so we ask for the already
--- filtered, gap-free list instead of walking all 40 slots and comparing the
--- caster in Lua. Indices returned here are indices *into that filtered list*,
--- so the tooltip must use SetUnitAura with the same filter string.
+-- Debuff rows. The default filter is the player's own debuffs only:
+-- Blizzard's C-side "PLAYER" filter does the ownership test inside the client,
+-- so we ask for the already filtered, gap-free list instead of walking all 40
+-- slots and comparing the caster in Lua. Indices returned here are indices
+-- *into that filtered list*, so the tooltip must use SetUnitAura with the same
+-- filter string. Callers may pass plain "HARMFUL" to show every debuff.
 local TARGET_DEBUFF_FILTER = "HARMFUL|PLAYER"
+local ALL_DEBUFF_FILTER    = "HARMFUL"
 
-local function UpdateTargetDebuffs(group)
+local function UpdateDebuffGroup(group, unit, filter)
+  filter = filter or TARGET_DEBUFF_FILTER
   local buttons = group.buttons
   local total = #buttons
   local shown = 0
-  if UnitExists("target") then
+  if UnitExists(unit) then
     for i = 1, total do
       local name, _, icon, count, _, duration, expires =
-        UnitAura("target", i, TARGET_DEBUFF_FILTER)
+        UnitAura(unit, i, filter)
       if not name then break end
       shown = i
       local b = buttons[i]
-      b.JUI_auraUnit, b.JUI_auraIndex, b.JUI_auraFilter =
-        "target", i, TARGET_DEBUFF_FILTER
+      b.JUI_auraUnit, b.JUI_auraIndex, b.JUI_auraFilter = unit, i, filter
       SetAuraButton(b, icon, count, duration, expires)
     end
   end
-  for i = shown + 1, total do
+  for i = shown + 1, (group.used or total) do
     ClearAuraButton(buttons[i])
   end
   group.used = shown
@@ -683,43 +708,21 @@ local function UpdateTargetDebuffs(group)
 end
 
 
-
--- ---------------------------------------------------------------------------
--- 8. Timer text helpers
--- ---------------------------------------------------------------------------
--- Timer text with a per-button cache: SetText is only called when the string
--- actually changes, which keeps the 4x/sec driver almost free.
-
-local function SetTimerText(b, txt)
-  if b.JUI_shownTime ~= txt then
-    b.JUI_shownTime = txt
-    b.time:SetText(txt)
+-- Number of icon rows a group needs for the given icon count.
+local function AuraRows(group, count)
+  if count <= 0 then return 0 end
+  local rows = 1
+  if count > group.firstRow then
+    rows = rows + ceil((count - group.firstRow) / group.nextRow)
   end
+  return rows
 end
 
-local unitAuraSecondText, unitAuraMinuteText = {}, {}
-local function TimerText(b, now)
-  local expires = b.JUI_expires
-  if expires and expires > 0 then
-    local r = expires - now
-    if r > 0 then
-      local value = r > 60 and floor(r / 60) or floor(r)
-      local cache = r > 60 and unitAuraMinuteText or unitAuraSecondText
-      local text = cache[value]
-      if not text then
-        text = tostring(value) .. (r > 60 and "m" or "")
-        cache[value] = text
-      end
-      SetTimerText(b, text)
-      return true
-    end
-  end
-  SetTimerText(b, "")
-  return false
-end
+
+
 
 -- ---------------------------------------------------------------------------
--- 9. Module: player / target / target-of-target + auras
+-- 8. Module: player / target / target-of-target
 -- ---------------------------------------------------------------------------
 
 J:AddModule(function()
@@ -830,7 +833,7 @@ J:AddModule(function()
   -- Target castbar lives in castbars.lua; only its drop distance is fed from
   -- the target debuff layout below.
   --
-  -- The player's own debuffs are owned entirely by playerauras.lua. That module
+  -- The player's own debuffs are owned entirely by Blizzard's buff frame (see blizzbuffs.lua).
   -- can anchor its debuff block either under the minimap or above the player
   -- frame, so this file no longer keeps a second, duplicate debuff row.
 
@@ -841,17 +844,10 @@ J:AddModule(function()
   local BUFF_SIZE = (W - 8 * BUFF_GAP) / 9
   local targetBuffs   = CreateAuraGroup(target, 27, BUFF_SIZE, BUFF_GAP, 1, "up", 9, 9)
   local targetDebuffs = CreateAuraGroup(target, 20, 28, 1, 1, "down", 4)
-  local targetAuraGroups = { targetBuffs, targetDebuffs }
 
   -- Keep the castbar just under the lowest visible debuff row
   local function UpdateCastbarAnchor(debuffCount)
-    local rows = 0
-    if debuffCount > 0 then
-      rows = 1
-      if debuffCount > targetDebuffs.firstRow then
-        rows = rows + ceil((debuffCount - targetDebuffs.firstRow) / targetDebuffs.nextRow)
-      end
-    end
+    local rows = AuraRows(targetDebuffs, debuffCount)
     -- Default position assumes two debuff rows; more rows push the bar down.
     if rows < 2 then rows = 2 end
     local drop = targetDebuffs.frameGap
@@ -863,9 +859,10 @@ J:AddModule(function()
 
   local function UpdateTargetAuras()
     UpdateAuraGroup(targetBuffs, "target", "HELPFUL")
-    local debuffCount = UpdateTargetDebuffs(targetDebuffs)
+    local debuffCount = UpdateDebuffGroup(targetDebuffs, "target")
     UpdateCastbarAnchor(debuffCount)
   end
+
 
   -- Aura events often arrive several times in one render frame. Collapse the
   -- burst into one scan/layout pass on the next frame instead of rebuilding
@@ -880,7 +877,7 @@ J:AddModule(function()
 
   -- Target aura visuals are refreshed directly from UNIT_AURA: stack changes
   -- and duration refreshes can keep the same slot count and must not depend on
-  -- a polling loop. The player's own auras belong to playerauras.lua.
+  -- a polling loop. The player's own auras belong to Blizzard's frame.
   AddHook("UNIT_AURA", function(_, unit)
     -- UNIT_AURA fires for every raid member; ignore all unrelated units.
     if unit ~= "target" then return end
@@ -916,7 +913,6 @@ J:AddModule(function()
     if self.JUI_elapsed < TICK then return end
     self.JUI_elapsed = 0
 
-    local now = GetTime()
     local hasTarget = UnitExists("target")
 
     -- --- pet retry burst --------------------------------------------------
@@ -927,25 +923,14 @@ J:AddModule(function()
 
     -- --- target of target -------------------------------------------------
     -- Value setters are all change-cached, so a poll with nothing new costs
-    -- only the unit queries.
+    -- only the unit queries. Aura countdown numbers are left to OmniCC, which
+    -- draws them on the native cooldown swipe at no Lua cost, so this loop has
+    -- nothing else to count down.
     if hasTarget then UpdateToT() end
 
-    -- --- timer text -------------------------------------------------------
-    local hasDuration = false
-
-    if hasTarget and J.db.targetAuraText then
-      for gi = 1, 2 do
-        local g = targetAuraGroups[gi]
-        local buttons = g.buttons
-        for i = 1, (g.used or 0) do
-          if TimerText(buttons[i], now) then hasDuration = true end
-        end
-      end
-    end
-
-    -- Nothing left to poll or count down: stop the loop entirely. Events wake
-    -- it back up through Wake().
-    if not hasDuration and not hasTarget and state.petRetries <= 0 then
+    -- Nothing left to poll: stop the loop entirely. Events wake it back up
+    -- through Wake().
+    if not hasTarget and state.petRetries <= 0 then
       self:Hide()
     end
   end)
@@ -954,10 +939,159 @@ J:AddModule(function()
 end)
 
 -- ---------------------------------------------------------------------------
+-- 9. Module: focus
+-- ---------------------------------------------------------------------------
+-- Same size and text layout as the player frame: name on the left, health on
+-- the right, raid target mark in the middle. Buffs above and own debuffs
+-- below, built with exactly the same aura machinery as the target frame; the
+-- focus frame has no target-of-target, so the debuff rows use the full frame
+-- width and the focus castbar rides underneath the lowest debuff row.
+--
+-- The custom frame has an event-driven mover. Blizzard's visual focus frames
+-- are hidden once at login; there is no polling, OnUpdate or recurring hook.
+
+
+J:AddModule(function()
+  local player = _G["JunkiePlayerFrame"]
+  local focus = CreateUnitFrame("JunkieFocusFrame", "focus", W, H, "focus")
+  focus:SetPowerShown(false)
+
+  -- Blizzard-safe visual suppression through its secure visibility driver.
+  -- No events, scripts, methods or alpha values on the protected focus path
+  -- are modified by addon code.
+  for _, stock in pairs({ FocusFrame, FocusFrameToT, FocusFrameSpellBar }) do
+    if stock then RegisterStateDriver(stock, "visibility", "hide") end
+  end
+
+  local mover = J:CreateMover("JunkieFocusMover", W, H,
+    "|cffde7230Drag: Focus frame|r")
+
+  local function PlaceFocus()
+    if InCombatLockdown and InCombatLockdown() then
+      state.focusPending = true
+      return
+    end
+    state.focusPending = false
+    focus:ClearAllPoints()
+    if J.db.focusMoved then
+      focus:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT",
+        tonumber(J.db.focusX) or 0, tonumber(J.db.focusY) or 0)
+    else
+      focus:SetPoint("BOTTOMLEFT", player, "TOPLEFT", 0, 60)
+    end
+  end
+
+  local function SyncFocusMover()
+    mover:ClearAllPoints()
+    mover:SetPoint("BOTTOMLEFT", focus, "BOTTOMLEFT", 0, 0)
+  end
+
+  mover:SetScript("OnDragStop", function(self)
+    self:StopMovingOrSizing()
+    local left, bottom = J:MoverPos(self)
+    J.db.focusX = floor(left + 0.5)
+    J.db.focusY = floor(bottom + 0.5)
+    J.db.focusMoved = true
+    PlaceFocus()
+    SyncFocusMover()
+  end)
+
+  function J:SetFocusUnlocked(on)
+    J.db.focusUnlocked = on and true or false
+    if J.db.focusUnlocked and not (InCombatLockdown and InCombatLockdown()) then
+      SyncFocusMover()
+      mover:Show()
+    else
+      mover:Hide()
+    end
+  end
+
+  PlaceFocus()
+  J:SetFocusUnlocked(J.db.focusUnlocked)
+  AddHook("PLAYER_REGEN_ENABLED", function()
+    if state.focusPending then PlaceFocus() end
+    if J.db.focusUnlocked then SyncFocusMover(); mover:Show() end
+  end)
+
+  -- ===== Focus auras: buffs above, own debuffs below =====
+  -- Same builders, same button pool logic and the same change-cached writers
+  -- as the target frame, so an idle focus costs nothing at all: the groups are
+  -- only touched from PLAYER_FOCUS_CHANGED and from UNIT_AURA with
+  -- arg1 == "focus". No ticker and no OnUpdate is involved.
+  -- 11 buffs and 10 debuffs per row, both sized so the row spans exactly the
+  -- 250px focus frame: size = (W - gaps) / icons per row.
+  local FBUFF_GAP   = 1
+  local FBUFF_PER   = 11
+  local FBUFF_SIZE  = (W - (FBUFF_PER - 1) * FBUFF_GAP) / FBUFF_PER
+  local FDEBUFF_GAP = 1
+  local FDEBUFF_PER = 10
+  local FDEBUFF_SIZE = (W - (FDEBUFF_PER - 1) * FDEBUFF_GAP) / FDEBUFF_PER
+  local focusBuffs = CreateAuraGroup(focus, FBUFF_PER * 3, FBUFF_SIZE,
+    FBUFF_GAP, 1, "up", FBUFF_PER, FBUFF_PER)
+  -- No target-of-target under the focus frame, so the debuff rows use the
+  -- whole frame width.
+  local focusDebuffs = CreateAuraGroup(focus, FDEBUFF_PER * 3, FDEBUFF_SIZE,
+    FDEBUFF_GAP, 1, "down", FDEBUFF_PER, FDEBUFF_PER)
+
+
+  -- The focus castbar sits 1px under the lowest visible debuff row and drops
+  -- further down as soon as the debuffs wrap onto a second row.
+  local function UpdateFocusCastbarAnchor(debuffCount)
+    local rows = AuraRows(focusDebuffs, debuffCount)
+    local drop = 1
+    if rows > 0 then
+      drop = focusDebuffs.frameGap
+        + rows * focusDebuffs.size
+        + (rows - 1) * focusDebuffs.gap
+        + 1
+    end
+    if J.AnchorFocusCastbar then J:AnchorFocusCastbar(drop) end
+  end
+
+  -- A friendly player as focus (main tank) shows every debuff on them, since
+  -- that is the point of watching them. A boss or other NPC shows only our own
+  -- debuffs, exactly like the target frame. UnitIsPlayer is a cheap C call and
+  -- only runs once per aura pass.
+  local function UpdateFocusAuras()
+    UpdateAuraGroup(focusBuffs, "focus", "HELPFUL")
+    local filter = UnitIsPlayer("focus") and ALL_DEBUFF_FILTER
+      or TARGET_DEBUFF_FILTER
+    UpdateFocusCastbarAnchor(UpdateDebuffGroup(focusDebuffs, "focus", filter))
+  end
+
+
+  -- Aura events arrive in bursts; collapse them into one pass on the next
+  -- frame, exactly like the target aura queue does.
+  local focusAuraQueue = CreateFrame("Frame")
+  focusAuraQueue:Hide()
+  focusAuraQueue:SetScript("OnUpdate", function(self)
+    self:Hide()
+    UpdateFocusAuras()
+  end)
+
+  AddHook("UNIT_AURA", function(_, unit)
+    if unit ~= "focus" then return end
+    focusAuraQueue:Show()
+  end)
+
+  local function RefreshFocus()
+    UpdateAll(focus)
+    UpdatePower(focus)
+    UpdateFocusAuras()
+  end
+  AddHook("PLAYER_FOCUS_CHANGED", function()
+    RefreshFocus()
+    if J.UpdateFocusCastbar then J:UpdateFocusCastbar() end
+  end)
+  AddHook("PLAYER_ENTERING_WORLD", RefreshFocus)
+  RefreshFocus()
+end)
+
+
+-- ---------------------------------------------------------------------------
 -- 10. Module: pet
 -- ---------------------------------------------------------------------------
--- Focus is intentionally left to Blizzard. Custom focus frames and even moving
--- Blizzard's protected FocusFrame can block /focus on some 3.3.5 clients.
+
 
 J:AddModule(function()
   local player = _G["JunkiePlayerFrame"]
@@ -1018,7 +1152,9 @@ J:AddModule(function()
 end)
 
 
--- Ascension resource bars ----------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- 10. Ascension resource bars
+-- ---------------------------------------------------------------------------
 -- The custom client draws its own resource widgets (segment bar, resource bar,
 -- multicast bar and the orb). They are Blizzard-side frames we do not own, so
 -- they are never destroyed or permanently neutered: a single OnShow hook per

@@ -1,4 +1,11 @@
--- Quality of life: auto repair
+--[[---------------------------------------------------------------------------
+  JunkieUI - Quality of life
+
+  Auto repair on merchant open (guild funds first, then personal), plus a guard
+  against a Blizzard bug that re-formats StaticPopup text every frame.
+
+  Cost: one event frame, work only while a merchant window is open.
+-------------------------------------------------------------------------------]]
 local J = JunkieUI
 
 local f = CreateFrame("Frame")

@@ -1,5 +1,13 @@
--- Spell / item picker. Scans the spellbook on login and whenever the spellbook
--- changes (talent or spec swap), plus every on-use item in bags and equipped.
+--[[---------------------------------------------------------------------------
+  JunkieCD - Spell / item picker
+
+  The searchable list used when adding a tracker. Scans the spellbook on login
+  and whenever it changes (talent or spec swap), plus every on-use item in bags
+  and equipped.
+
+  Cost: the scan result is cached and only invalidated by spellbook / bag
+  events. Nothing runs while the picker is closed.
+-------------------------------------------------------------------------------]]
 local C = JunkieCD
 
 local cache, cacheDirty = {}, true
@@ -99,7 +107,9 @@ function C:SpellList()
   return cache
 end
 
--- Picker UI -------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- 1. Picker UI
+-- ---------------------------------------------------------------------------
 local ROWS = 14
 local ROW_H = 22
 

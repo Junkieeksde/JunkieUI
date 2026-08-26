@@ -1,6 +1,12 @@
--- Glow effects for aura icons. Cooldown icons follow the client's own spell
--- activation overlay engine instead (see bars.lua).
--- Animation driven; the rotating style uses a light OnUpdate only while shown.
+--[[---------------------------------------------------------------------------
+  JunkieCD - Glow effects
+
+  Glows for aura icons. Cooldown icons use the client's own spell activation
+  overlay engine instead (see bars.lua).
+
+  Cost: animation driven through the widget animation system. Only the rotating
+  style keeps a light OnUpdate, and only while that glow is actually shown.
+-------------------------------------------------------------------------------]]
 local C = JunkieCD
 
 C.GLOW_TYPES = {
@@ -181,4 +187,20 @@ function C:SetGlow(frame, kind, show)
   g:Show()
   if g.anim then g.anim:Play() end
 
+end
+
+-- Prewarm: build a glow's frames/textures ahead of time without showing them.
+-- The very first proc in a fight would otherwise create nine textures and an
+-- animation group mid-combat, which is exactly when a hitch is most visible.
+function C:PrewarmGlow(frame, kind)
+  if not frame or not kind or kind == "none" then return end
+  if kind == "glow" then kind = "pixel" end
+  local build = builders[kind]
+  if not build then return end
+  frame.jcdGlows = frame.jcdGlows or {}
+  if frame.jcdGlows[kind] then return end
+  local g = build(frame)
+  if g.anim then g.anim:Stop() end
+  g:Hide()
+  frame.jcdGlows[kind] = g
 end

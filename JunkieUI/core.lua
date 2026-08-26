@@ -1,17 +1,41 @@
--- Junkie UI - Featherlight
--- Core: namespace, defaults, helpers
+--[[---------------------------------------------------------------------------
+  JunkieUI - Core
+
+  The namespace every other file hangs off. Owns:
+    * the JunkieUI frame / global table
+    * saved-variable defaults and profile merge
+    * shared colour, pixel and font helpers
+    * the module registry (J:AddModule) and its single PLAYER_LOGIN dispatch
+
+  Load order is fixed in JunkieUI.toc: core -> media -> everything else. A
+  module registered with J:AddModule runs once, after saved variables exist.
+
+  Cost: no loops, no OnUpdate. One event frame for login / profile events.
+
+  Sections:
+    1. Colors
+    2. Pixel helpers
+    3. Helpers
+    4. Movable elements
+    5. Keybind labels
+    6. Init
+-------------------------------------------------------------------------------]]
 
 local ADDON = ...
 JunkieUI = CreateFrame("Frame", "JunkieUIFrame", UIParent)
 local J = JunkieUI
 
-J.version = "2.5.2"
+J.version = "3.0.0"
 J.modules = {}
 
--- Colors -------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- 1. Colors
+-- ---------------------------------------------------------------------------
 J.BORDER = { 0.137, 0.137, 0.137 }
 
--- Pixel helpers -------------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- 2. Pixel helpers
+-- ---------------------------------------------------------------------------
 -- A UI unit is only worth a whole physical pixel when scale * (screenH/768)
 -- is an integer. At Medium (1.125 px per unit) a 1-unit border lands on
 -- 1.125 px, so the rasterizer paints some edges 1 px and some 2 px - the
@@ -69,12 +93,12 @@ J.defaults = {
   mapSize = 1,            -- minimap size step 1..5 (5 = 20% larger)
   fontChoice = "expressway", -- media.lua font key
   barTexture = "Flat",    -- statusbar texture name (media.lua / LibSharedMedia)
-  cooldownText = true,
   macroText = false,      -- show macro names on action buttons
   keyPressDown = false,   -- trigger action buttons on key/mouse down instead of up
   barLayout = "one",      -- one | three | triple | tripleHigh | sebby
   barBackground = true,   -- background plates behind the action bars
-  barMouseover = false,   -- action bars hidden until the mouse hovers them
+  barScale = 100,         -- action bar size in percent: 100 | 90 | 80 | 70
+
 
   stanceBar = false,      -- show the stance / shapeshift bar (top left)
   microMenu = false,      -- show Blizzard's micro menu under the clock bar
@@ -83,22 +107,22 @@ J.defaults = {
 
   unitGap = 250,          -- pixels between player and target frame (1..500)
   unitY = -180,           -- shared Y offset from center
+  focusUnlocked = false,  -- show the focus-frame drag handle
+  focusMoved = false,     -- use the custom focus position below
+  focusX = 0,
+  focusY = 0,
   hideCoAResource = false, -- hide Ascension's own resource bars / orb
   coaWasHidden = false,   -- bookkeeping: the option hid them at least once
   coaHiddenFrames = {},   -- exact Ascension widgets hidden by this option
 
   playerPower = true,     -- show player power bar
   targetPower = true,     -- show target power bar
-  targetAuraText = true,  -- cooldown text on target buffs/debuffs
   -- castbars
   playerCastbar = true,   -- JunkieUI player castbar
   targetCastbar = true,   -- JunkieUI target castbar
   blizzardCastbars = false, -- keep Blizzard's own castbars visible
-  -- player auras (own boxes under the minimap)
-  buffSize = 30,          -- player buff icon size
-  playerDebuffSize = 34,  -- player debuff icon size (under the minimap)
-  debuffsOnFrame = false, -- dock the debuff block above the player unit frame
-  debuffBlacklist = {},   -- [spellID] = true, hidden player debuffs (O(1) lookup)
+  -- player auras (Blizzard's frame, reskinned by blizzbuffs.lua)
+  buffScale = 100,        -- aura icon scale in percent
   -- totem bar (shaman)
   totemBar = true,        -- show the totem / multicast bar
   totemUnlocked = false,  -- allow dragging it
@@ -115,7 +139,6 @@ J.defaults = {
   lootX = 0,
   lootY = 180,
   -- tooltip
-  tooltipMouse = false,    -- tooltip follows the mouse (top right, 8px)
   tooltipUnlocked = false, -- show/move the anchor
   tooltipX = -220,
   tooltipY = 220,
@@ -128,7 +151,9 @@ J.defaults = {
 }
 
 
--- Helpers ------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- 3. Helpers
+-- ---------------------------------------------------------------------------
 function J:SkinUnit(frame)
   if frame.jbg then return frame end
   local bg = frame:CreateTexture(nil, "BACKGROUND")
@@ -154,7 +179,9 @@ function J:Text(parent, size, justify)
   return fs
 end
 
--- Movable elements ----------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- 4. Movable elements
+-- ---------------------------------------------------------------------------
 -- Loot rolls, the totem bar and the quest tracker all used to
 -- hand-roll the same drag handle: identical backdrop table, identical colors,
 -- identical StartMoving/StopMovingOrSizing pair. One implementation now, so a
@@ -205,7 +232,9 @@ function J:MoverPos(frame)
 end
 
 
--- Keybind labels ------------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- 5. Keybind labels
+-- ---------------------------------------------------------------------------
 -- Blizzard's binding text ("Mouse Button 4", "Shift-Num Pad 1") is far too long
 -- for a 30px button, so every bar renders the same shortened form.
 -- Order matters: the longest names must be replaced before their substrings.
@@ -273,7 +302,9 @@ function J:Short(v)
   return tostring(v)
 end
 
--- Init ---------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- 6. Init
+-- ---------------------------------------------------------------------------
 J:RegisterEvent("ADDON_LOADED")
 J:RegisterEvent("PLAYER_LOGIN")
 -- Pixel-perfect scale ladder. On a 2560x1440 screen one UI unit maps to

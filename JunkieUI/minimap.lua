@@ -1,14 +1,25 @@
--- ============================================================================
--- JunkieUI - Minimap
--- Square minimap with a 1px #000 border, custom clock box docked underneath,
--- and a hard-locked quest tracker. No globals are created by this file other
--- than the named frames the WoW API requires (Junkie* frame names).
--- ============================================================================
+--[[---------------------------------------------------------------------------
+  JunkieUI - Minimap
+
+  Square minimap with a 1px #000 border, a custom clock box docked underneath
+  and a hard-locked quest tracker. No globals are created by this file other
+  than the named frames the WoW API requires (Junkie* frame names).
+
+  Size changes are broadcast so dependants (the button collector and the
+  Blizzard buff chain) re-anchor themselves instead of polling.
+
+  Cost: event driven only. No OnUpdate.
+
+  Sections:
+    1. Upvalues
+    2. Helpers
+    3. Module
+-------------------------------------------------------------------------------]]
 
 local J = JunkieUI
 
 -- ---------------------------------------------------------------------------
--- Upvalues
+-- 1. Upvalues
 -- ---------------------------------------------------------------------------
 local CreateFrame   = CreateFrame
 local UIParent      = UIParent
@@ -49,7 +60,7 @@ local state = {
 }
 
 -- ---------------------------------------------------------------------------
--- Helpers
+-- 2. Helpers
 -- ---------------------------------------------------------------------------
 
 -- Size steps 1..5: step 1 is the original size, step 5 is 20% larger.
@@ -66,7 +77,7 @@ local function Skin(frame, backdrop, r, g, b, a)
 end
 
 -- ---------------------------------------------------------------------------
--- Module
+-- 3. Module
 -- ---------------------------------------------------------------------------
 J:AddModule(function()
   -- -- Blizzard chrome ------------------------------------------------------
@@ -126,7 +137,9 @@ J:AddModule(function()
     local s = MapSize()
     Minimap:SetSize(s, s)
     MinimapCluster:SetSize(s, s)
-    if J.UpdatePlayerAuraSizes then J:UpdatePlayerAuraSizes() end
+    -- Blizzard's buff frame is docked to the minimap; re-apply the anchor so it
+    -- tracks the new width instead of staying where the old map edge was.
+    if J.AnchorBlizzardAuras then J.AnchorBlizzardAuras() end
   end
   J:ApplyMinimapSize()
 

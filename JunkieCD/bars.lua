@@ -1,14 +1,29 @@
--- Junkie CD - display layer
--- Layout (top to bottom):
---   aura row 3 / 2 / 1        (dynamic, centred, only active auras)
---   60px gap
---   combo point bar           (15px, docked on top of the power bars)
---   power bar 2 / power bar 1 (15px each, 1px gap)
---   1px gap
---   main cooldown bar         (40px icons, 1px gaps)
---   secondary cooldown bar
--- Only the power bars use an OnUpdate (capped at 100 fps); everything else is
--- event driven and uses the client's own Cooldown widget for swipes.
+--[[---------------------------------------------------------------------------
+  JunkieCD - Display layer
+
+  Layout (top to bottom):
+    aura row 3 / 2 / 1        (dynamic, centred, only active auras)
+    60px gap
+    combo point bar           (15px, docked on top of the power bars)
+    power bar 2 / power bar 1 (15px each, 1px gap)
+    1px gap
+    main cooldown bar         (40px icons, 1px gaps)
+    secondary cooldown bar
+
+  Cost: only the power bars use an OnUpdate (capped at 100 fps). Everything
+  else is event driven, uses the client's own Cooldown widget for swipes, and
+  leaves cooldown numbers to OmniCC. Repaints are queued and coalesced rather
+  than run once per incoming event.
+
+  Sections:
+    1. Helpers
+    2. Anchor
+    3. Cooldown bars
+    4. Bars
+    5. Rebuild
+    6. Updates
+    7. Event driver
+-------------------------------------------------------------------------------]]
 local C = JunkieCD
 
 -- Upvalues. Everything below runs per icon, per tick, so the globals are
@@ -24,14 +39,11 @@ local GAP = 1
 local ROW_GAP = 45
 -- The four cooldown canvases, in the order they are drawn.
 local SET_KEYS = { "main", "sub", "up", "down" }
-local AURA_UNITS = { "player", "target", "pet" }
+local AURA_UNITS = { "player", "target", "pet", "focus" }
 
 local anchor, main, sub, slots, rows
 local upBar, downBar
 local driver
--- Weak keys: an icon frame that is thrown away must never be kept alive by the
--- timer list.
-local timedIcons = setmetatable({}, { __mode = "k" })
 -- Filled in once the frames exist: { main.icons, sub.icons, upBar.icons, downBar.icons }.
 local iconLists = {}
 local FindAura
@@ -40,13 +52,13 @@ local FindAura
 local GlowAuraActive, FindGlowAura
 local UpdateRangeTicker
 local actionSlotsByID, actionSlotsByName = {}, {}
-local auraCache = { player = {}, target = {}, pet = {} }
-local auraNameCache = { player = {}, target = {}, pet = {} }
-local auraRecords = { player = {}, target = {}, pet = {} }
+local auraCache = { player = {}, target = {}, pet = {}, focus = {} }
+local auraNameCache = { player = {}, target = {}, pet = {}, focus = {} }
+local auraRecords = { player = {}, target = {}, pet = {}, focus = {} }
 -- Same lookup maps, but only filled with auras cast by the player. They are
 -- built in the very same scan loop, so "only own" costs no extra API calls.
-local auraMineCache = { player = {}, target = {}, pet = {} }
-local auraMineNameCache = { player = {}, target = {}, pet = {} }
+local auraMineCache = { player = {}, target = {}, pet = {}, focus = {} }
+local auraMineNameCache = { player = {}, target = {}, pet = {}, focus = {} }
 -- True as soon as the client reports a spellID for any aura: exact lookups can
 -- then trust the ID map and skip the name fallback entirely.
 local auraIDsAvailable = false
@@ -143,79 +155,11 @@ local function QueueCooldownUpdate() cdQueue:Show() end
 
 C.QueueCooldownUpdate = QueueCooldownUpdate
 
--- Timer strings are shared by every icon. Cache each displayed value once so
--- simultaneous cooldowns do not manufacture identical short-lived strings on
--- every 0.2 second pass (a common source of GC spikes on Lua 5.1).
-local secondText, minuteText, hourText = {}, {}, {}
-local function FormatTime(r)
-  local value, cache, suffix
-  if r >= 3600 then
-    value, cache, suffix = math.floor(r / 3600 + 0.5), hourText, "h"
-  elseif r > 60 then
-    value, cache, suffix = math.floor(r / 60 + 0.5), minuteText, "m"
-  else
-    value, cache, suffix = math.floor(r + 0.5), secondText, ""
-  end
-  local text = cache[value]
-  if not text then text = tostring(value) .. suffix; cache[value] = text end
-  return text
-end
-
-local timerDriver = CreateFrame("Frame")
-timerDriver:Hide()
-timerDriver.elapsed = 0
-timerDriver:SetScript("OnUpdate", function(self, elapsed)
-  self.elapsed = self.elapsed + elapsed
-  if self.elapsed < 0.2 then return end
-  self.elapsed = 0
-  if not C.db or not C.db.cooldownText then self:Hide(); return end
-  local now, active = GetTime(), false
-  for f in pairs(timedIcons) do
-    local remaining = f.timerStart and f.timerDuration and (f.timerStart + f.timerDuration - now) or 0
-    if remaining > 0 and f:IsShown() then
-      active = true
-      -- Only touch the font string when the printed value actually changed:
-      -- SetText re-lays the string out on every call, five times a second.
-      local text = FormatTime(remaining)
-      if f.jcdTimerText ~= text then
-        f.jcdTimerText = text
-        f.timerText:SetText(text)
-      end
-      local low = remaining <= 5
-      if f.jcdTimerLow ~= low then
-        f.jcdTimerLow = low
-        if low then
-          f.timerText:SetTextColor(1, 0.25, 0.25)
-        else
-          f.timerText:SetTextColor(1, 0.85, 0.2)
-        end
-      end
-      f.timerText:Show()
-    else
-      if f.jcdTimerText ~= "" then
-        f.jcdTimerText = ""
-        f.timerText:SetText("")
-      end
-      timedIcons[f] = nil
-    end
-  end
-  if not active then self:Hide() end
-end)
-
-local function SetTimer(f, start, duration)
-  f.timerStart, f.timerDuration = start, duration
-  if C.db and C.db.cooldownText and start and duration and duration > 1.5 and start + duration > GetTime() then
-    timedIcons[f] = true
-    timerDriver:Show()
-  else
-    timedIcons[f] = nil
-    if f.jcdTimerText ~= "" then
-      f.jcdTimerText = ""
-      f.timerText:SetText("")
-    end
-    f.timerText:Hide()
-  end
-end
+-- Cooldown numbers are deliberately not drawn by JunkieCD. OmniCC (or any
+-- other cooldown-count addon) renders them on the native cooldown swipe for
+-- free, so keeping a Lua timer loop here was pure duplicated cost.
+-- SetTimer is kept as a no-op so the call sites stay readable.
+local function SetTimer() end
 
 local auraScratch = { {}, {}, {}, {} }
 
@@ -245,7 +189,9 @@ expiryDriver:SetScript("OnUpdate", function(self, elapsed)
   C:UpdateAuras(nil, true)
 end)
 
--- Helpers -------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- 1. Helpers
+-- ---------------------------------------------------------------------------
 -- Name and texture never change for a given id, so a complete answer is kept.
 -- EntryInfo is called for every icon on every cooldown repaint.
 local spellInfoName, spellInfoTex = {}, {}
@@ -340,9 +286,6 @@ local function EnsureIcons(holder, count, size)
 
       f.count = C:Text(f.textLayer, 12, "RIGHT")
       f.count:SetPoint("BOTTOMRIGHT", -2, 2)
-      f.timerText = C:Text(f.textLayer, 13, "CENTER")
-      f.timerText:SetPoint("CENTER", f, "CENTER", 0, 1)
-      f.timerText:SetDrawLayer("OVERLAY", 7)
       f:SetScript("OnEnter", function(self)
         local e = self.entry
         if not (e and e.id) then return end
@@ -374,7 +317,9 @@ local function EnsureIcons(holder, count, size)
   end
 end
 
--- Anchor --------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- 2. Anchor
+-- ---------------------------------------------------------------------------
 local function BuildAnchor()
   anchor = CreateFrame("Frame", "JunkieCDAnchor", UIParent)
   anchor:SetSize(200, 40)
@@ -408,7 +353,9 @@ function C:AnchorPosition()
 end
 
 
--- Cooldown bars --------------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- 3. Cooldown bars
+-- ---------------------------------------------------------------------------
 -- Base width used while a bar has no icons at all: the power bars and the
 -- combo bar hang off this row, so it must still report a sane width or they
 -- would collapse and look invisible.
@@ -511,7 +458,9 @@ local function BuildUnitBar(holder, entries, count, size, grow)
   return width
 end
 
--- Bars -----------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- 4. Bars
+-- ---------------------------------------------------------------------------
 -- Power bars and combo plates follow the bar texture chosen in JunkieUI.
 C.statusbars, C.comboFills = {}, {}
 
@@ -568,16 +517,6 @@ local function BuildSlot(parent)
 end
 
 local COMBO_GAP = 0
--- Kept for older calls: the colour of the first combo slot.
-function C:ComboColor()
-  local bars = C:ActiveBars() or {}
-  for i = 1, (C.MAX_BARS or 3) do
-    local b = bars[i]
-    if b and b.kind == "combo" then return C:BarColor(b) end
-  end
-  return C.ACCENT
-end
-
 local function LayoutCombo(holder, width, count, height, col)
   for _, p in ipairs(holder.points) do p:Hide() end
   if count <= 0 then return end
@@ -616,7 +555,9 @@ end
 
 
 
--- Rebuild --------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- 5. Rebuild
+-- ---------------------------------------------------------------------------
 function C:Rebuild()
   if not anchor then return end
   -- Resizing or re-anchoring while the player is in combat can be blocked by
@@ -785,10 +726,15 @@ function C:Rebuild()
   C:UpdatePower()
   C:UpdateCombo()
   if UpdateRangeTicker then UpdateRangeTicker() end
+  -- Build the glow art now, while nothing is happening, instead of during the
+  -- first proc of the next fight.
+  if C.PrewarmGlows then C:PrewarmGlows() end
 end
 
 
--- Updates ---------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- 6. Updates
+-- ---------------------------------------------------------------------------
 -- Spell alert (proc) state, mirroring what the action bars do. The client fires
 -- SPELL_ACTIVATION_OVERLAY_GLOW_SHOW/HIDE with a spell id; IsSpellOverlayed is
 -- used as a second source so a proc that started before login is caught too.
@@ -846,6 +792,21 @@ local function SetCountText(f, txt)
     f.count:SetText(txt)
   end
 end
+
+-- Counts are printed many times a second on every icon. tostring() builds a
+-- fresh string each time, which is pure garbage for the collector; the same
+-- handful of numbers are converted once and then reused for the session.
+local numStr = {}
+local function NumText(n)
+  if not n then return "" end
+  local s = numStr[n]
+  if not s then
+    s = tostring(n)
+    numStr[n] = s
+  end
+  return s
+end
+
 
 local function SetDesat(f, on)
   on = on and true or false
@@ -958,7 +919,7 @@ local function UpdateCDIcon(f, profile)
   elseif shownEntry.kind == "item" then
     start, duration, enable = GetItemCooldown(shownEntry.id)
     local cnt = GetItemCount(shownEntry.id)
-    SetCountText(f, (cnt and cnt > 1) and cnt or "")
+    SetCountText(f, (cnt and cnt > 1) and NumText(cnt) or "")
   else
     if name then
       start, duration, enable = GetSpellCooldown(name)
@@ -1042,13 +1003,13 @@ local function UpdateCDIcon(f, profile)
     elseif entry.stacksEnabled and stacks and stacks > 0 then
       shownCount = stacks
     end
-    SetCountText(f, shownCount and tostring(shownCount) or "")
+    SetCountText(f, NumText(shownCount))
   end
 
-  -- The global cooldown is hidden by default: without this every icon flashes
-  -- a 1.5s swipe on every cast.
-  local p = profile or C:Profile()
-  local minDur = (p and p.showGCD) and 0 or 1.5
+  -- The global cooldown is always drawn: the toggle was removed, so every
+  -- cooldown (including the 1.5s GCD swipe) is shown on the icons.
+  local minDur = 0
+
   -- Charge recharge has its own timer. Keep the swipe running while any charge
   -- is recharging, but only desaturate once no usable charge remains.
   local recharge = charges ~= nil and chargeStart and chargeDuration and chargeDuration > minDur
@@ -1114,20 +1075,40 @@ end
 -- The 5Hz poll only has to answer one question: did this icon move in or out
 -- of range? Repainting the whole icon every tick is wasted work, so we compare
 -- the range flag first and only rebuild when it flipped.
+--
+-- rangeSkip is the second saving: a lot of spells have no range at all against
+-- the current target (self buffs, auras, friendly-only spells on an enemy).
+-- For those IsSpellInRange returns nil, and it will keep returning nil for as
+-- long as the target stays the same. Those names are parked after the first
+-- call and cost nothing on every later sweep. The table is emptied whenever the
+-- target changes (UpdateRangeTicker), because the answer can differ per unit.
 local rangeMemo = {}
+local rangeSkip = {}
 local function RangeSweep(list)
   for i = 1, #list do
     local f = list[i]
     local name = f.jcdSpellName
-    if name and f:IsShown() then
+    if name and not rangeSkip[name] and f:IsShown() then
       -- The same spell can sit on several icons (duplicates, second bar). One
       -- API call per distinct name per sweep instead of one per icon.
       local inRange = rangeMemo[name]
       if inRange == nil then
-        inRange = IsSpellInRange(name, "target") ~= 0
-        rangeMemo[name] = inRange
+        local r = IsSpellInRange(name, "target")
+        if r == nil then
+          -- No range concept for this spell against this target: park it and
+          -- make sure the icon is left in the normal, untinted state.
+          rangeSkip[name] = true
+          if f.jcdInRange == false then
+            f.jcdInRange = nil
+            SetIconTint(f, 1, 1, 1)
+          end
+          inRange = nil
+        else
+          inRange = (r ~= 0)
+          rangeMemo[name] = inRange
+        end
       end
-      if inRange ~= f.jcdInRange then
+      if inRange ~= nil and inRange ~= f.jcdInRange then
         f.jcdInRange = inRange
         -- Range only ever drives the icon tint; rebuilding the whole icon here
         -- would re-query every cooldown API for nothing.
@@ -1141,6 +1122,7 @@ local function RangeSweep(list)
   end
 end
 
+
 function C:UpdateCooldowns()
   local profile = C:Profile()
   for l = 1, #iconLists do
@@ -1151,6 +1133,53 @@ function C:UpdateCooldowns()
     end
   end
 end
+
+-- Glow prewarm: the frames and textures a glow needs are built here, out of
+-- combat and a few icons per frame, so the first proc of a fight only has to
+-- Show() something that already exists. Nothing is displayed by this pass.
+local prewarm = CreateFrame("Frame")
+prewarm:Hide()
+prewarm.list, prewarm.index = nil, 1
+prewarm:SetScript("OnUpdate", function(self)
+  if InCombatLockdown and InCombatLockdown() then self:Hide(); return end
+  local list = self.list
+  if not list then self:Hide(); return end
+  local done = 0
+  while self.index <= #list and done < 4 do
+    local f = list[self.index]
+    self.index = self.index + 1
+    done = done + 1
+    if f then
+      C:PrewarmGlow(f, "pixel")
+      C:PrewarmGlow(f, "proc")
+    end
+  end
+  if self.index > #list then self:Hide() end
+end)
+
+local prewarmList = {}
+function C:PrewarmGlows()
+  if not C.PrewarmGlow then return end
+  for i = #prewarmList, 1, -1 do prewarmList[i] = nil end
+  for l = 1, #iconLists do
+    local list = iconLists[l]
+    for i = 1, #list do prewarmList[#prewarmList + 1] = list[i] end
+  end
+  if rows then
+    for r = 1, 4 do
+      local holder = rows[r]
+      local icons = holder and holder.icons
+      if icons then
+        for i = 1, #icons do prewarmList[#prewarmList + 1] = icons[i] end
+      end
+    end
+  end
+  if #prewarmList == 0 then return end
+  prewarm.list, prewarm.index = prewarmList, 1
+  prewarm:Show()
+end
+
+
 
 -- The spell alert events and the client's own ActionButton overlay hooks all
 -- ask the same question: which of our icons carry this spell?
@@ -1195,10 +1224,15 @@ rangeTicker:SetScript("OnUpdate", function(self, elapsed)
 end)
 
 UpdateRangeTicker = function()
+  -- New target (or a rebuilt icon set): the "this spell has no range" answers
+  -- are per unit, so they are thrown away here and rebuilt on the next sweep.
+  for k in pairs(rangeSkip) do rangeSkip[k] = nil end
+  for k in pairs(rangeMemo) do rangeMemo[k] = nil end
   local n = 0
   for l = 1, #iconLists do n = n + #iconLists[l] end
   if n > 0 and UnitExists("target") then rangeTicker:Show() else rangeTicker:Hide() end
 end
+
 
 -- Aura lookup by exact spell id.
 local function ScanAuraFilter(unit, filter)
@@ -1290,7 +1324,8 @@ local function AuraUnitFilter(entry)
   if key == "my" then key = "player" end
   if key == "target" and not (entry and entry.filter) then return "target", "HARMFUL" end
   if key == "pet" and not (entry and entry.filter) then return "pet", "HELPFUL" end
-  local unit = (key == "target" or key == "pet") and key or "player"
+  if key == "focus" and not (entry and entry.filter) then return "focus", "HARMFUL" end
+  local unit = (key == "target" or key == "pet" or key == "focus") and key or "player"
   local filter = (entry and entry.filter == "debuff") and "HARMFUL" or "HELPFUL"
   return unit, filter
 end
@@ -1495,31 +1530,49 @@ local function AuraStacks(cfg)
   return count or 0
 end
 
+-- Percent labels are only ever 0-100: cached the same way the counts are, so
+-- a mana tick no longer builds a fresh string every time.
+local pctStr = {}
+local function PctText(p)
+  local s = pctStr[p]
+  if not s then
+    s = p .. "%"
+    pctStr[p] = s
+  end
+  return s
+end
+
 function C:UpdatePower()
   for i = 1, C.MAX_BARS do
     local slot = slots[i]
     local cfg = slot and slot.cfg
     if slot and slot:IsShown() and cfg and cfg.kind == "resource" then
-      local cur, max, txt = 0, 0, ""
+      local cur, max = 0, 0
+      local percent = false
       if cfg.resource == "OTHER" then
         cur = AuraStacks(cfg)
         max = math.max(1, tonumber(cfg.maxStacks) or 100)
         if cur > max then cur = max end
-        txt = tostring(cur)
       else
         local info = C:PowerInfo(slot.powerKey or cfg.resource)
         cur = UnitPower("player", info.index) or 0
         max = UnitPowerMax("player", info.index) or 0
-        if max > 0 then
-          if info.key == "MANA" and cfg.showPercent then
-            txt = math.floor(cur / max * 100 + 0.5) .. "%"
-          else
-            txt = tostring(cur)
-          end
-        end
+        percent = (max > 0 and info.key == "MANA" and cfg.showPercent) and true or false
       end
+      -- The label is only built once the numbers actually moved: the old code
+      -- formatted a string on every single power event and threw it away.
       if slot.lastCur ~= cur or slot.lastMax ~= max then
         slot.lastCur, slot.lastMax = cur, max
+        local txt = ""
+        if cfg.resource == "OTHER" then
+          txt = NumText(cur)
+        elseif max > 0 then
+          if percent then
+            txt = PctText(math.floor(cur / max * 100 + 0.5))
+          else
+            txt = NumText(cur)
+          end
+        end
         slot.bar:SetMinMaxValues(0, max > 0 and max or 1)
         SetPowerValue(slot, cur, cfg.smooth and true or false)
         slot.text:SetText(txt)
@@ -1527,6 +1580,7 @@ function C:UpdatePower()
     end
   end
 end
+
 
 -- Recharge sweep: only alive while a charge is actually filling up.
 local chargeTicker = CreateFrame("Frame")
@@ -1651,7 +1705,9 @@ function C:RemindNow(entry)
   return true
 end
 
--- Event driver -----------------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- 7. Event driver
+-- ---------------------------------------------------------------------------
 C:AddModule(function()
   BuildAnchor()
 
@@ -1708,6 +1764,7 @@ C:AddModule(function()
   driver:RegisterEvent("ACTIONBAR_PAGE_CHANGED")
   driver:RegisterEvent("UNIT_AURA")
   driver:RegisterEvent("PLAYER_TARGET_CHANGED")
+  driver:RegisterEvent("PLAYER_FOCUS_CHANGED")
   driver:RegisterEvent("UNIT_PET")
   driver:RegisterEvent("UNIT_COMBO_POINTS")
   driver:RegisterEvent("PLAYER_ENTERING_WORLD")
@@ -1810,7 +1867,8 @@ C:AddModule(function()
       return
     end
     if event == "UNIT_AURA" then
-      if unit == "player" or unit == "target" or unit == "pet" then
+      if unit == "player" or unit == "target" or unit == "pet"
+        or unit == "focus" then
         QueueAuraRepaint(unit)
       end
       return
@@ -1818,7 +1876,8 @@ C:AddModule(function()
     -- UNIT_PET fires for every pet in the raid. Only our own pet may trigger
     -- a full aura + cooldown repaint; 24 other hunters/warlocks must not.
     if event == "UNIT_PET" and unit ~= "player" and unit ~= "pet" then return end
-    if event == "PLAYER_TARGET_CHANGED" or event == "UNIT_PET" then
+    if event == "PLAYER_TARGET_CHANGED" or event == "UNIT_PET"
+      or event == "PLAYER_FOCUS_CHANGED" then
       Repaint(nil)
       -- A target appearing or vanishing is what wakes or parks the range sweep.
       UpdateRangeTicker()

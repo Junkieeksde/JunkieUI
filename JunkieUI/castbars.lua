@@ -1,6 +1,19 @@
--- Player / target castbars
--- Custom bars replacing Blizzard's. The OnUpdate script is only attached while
--- a cast is actually running, so there is no idle loop.
+--[[---------------------------------------------------------------------------
+  JunkieUI - Castbars (player / target)
+
+  Custom bars replacing Blizzard's own. Blizzard's frames are hidden, ours are
+  driven purely by UNIT_SPELLCAST_* events.
+
+  Cost: the OnUpdate is attached only while a cast is actually running and is
+  detached on stop, so there is no idle loop. While running, SetValue is
+  skipped unless the change is worth at least one pixel of bar fill.
+
+  Sections:
+    1. Upvalues
+    2. OnUpdate driver
+    3. Bar construction
+    4. Event handling
+-------------------------------------------------------------------------------]]
 local J = JunkieUI
 
 -- Upvalues: the OnUpdate below runs every frame while a cast is up, so the
@@ -10,11 +23,12 @@ local UIParent        = UIParent
 local GetTime         = GetTime
 local UnitCastingInfo = UnitCastingInfo
 local UnitChannelInfo = UnitChannelInfo
-local format          = string.format
 
 local PLAYER_W, PLAYER_H = 325, 33   -- total width, icon included (10% larger)
 local SEBBY_PLAYER_H = 30            -- docked bar keeps the original height
 local TARGET_W, TARGET_H = 250, 30   -- matches the target unit frame width
+local FOCUS_W = 250                  -- matches the focus unit frame width
+
 local SEBBY_TARGET_W, SEBBY_TARGET_H = 380, 43
 
 local SEBBY_TARGET_TOP = 300         -- distance from the top of the screen
@@ -31,7 +45,9 @@ local function FormatTime(v)
   return text
 end
 
--- Build ---------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- 1. Build
+-- ---------------------------------------------------------------------------
 local function CreateCastbar(name, unit, width, height)
   local f = CreateFrame("Frame", name, UIParent)
   f:SetSize(width, height)
@@ -82,7 +98,9 @@ local function CreateCastbar(name, unit, width, height)
   return f
 end
 
--- Driver --------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- 2. Driver
+-- ---------------------------------------------------------------------------
 local function OnUpdate(self, elapsed)
   local now = GetTime()
   local value
@@ -96,7 +114,19 @@ local function OnUpdate(self, elapsed)
       return self:StopCast()
     end
   end
-  self.bar:SetValue(value)
+
+  -- Pixel-exact skip: pushing a value that rounds to the same filled pixel
+  -- draws the identical frame, so the StatusBar write is simply dropped.
+  -- Purely a redundant-write filter - the bar still moves every time it can
+  -- actually move on screen, so there is no visible difference at all.
+  local last = self.JUI_lastValue
+  local step = self.JUI_valueStep
+  if last and step and value > last - step and value < last + step then
+    -- no visible movement this frame
+  else
+    self.JUI_lastValue = value
+    self.bar:SetValue(value)
+  end
 
   -- Only the text is throttled; the bar itself runs at full framerate.
   self.tt = (self.tt or 0) + elapsed
@@ -157,6 +187,11 @@ local function StartCast(self, channel)
   else
     self.bar:SetStatusBarColor(0.871, 0.447, 0.188)
   end
+  -- One value unit == one pixel of bar fill; used by OnUpdate to drop writes
+  -- that would not change a single pixel.
+  local w = self.bar:GetWidth()
+  self.JUI_valueStep = (w and w > 1) and (self.duration / w) or nil
+  self.JUI_lastValue = nil
   self.tt = 0.1
   self:Show()
   self:SetScript("OnUpdate", OnUpdate)
@@ -179,11 +214,13 @@ end
 -- Only events carrying the lineID of the running cast may stop it.
 local function OnEvent(self, event, unit, spellName, spellRank, lineID)
   if not self.enabled then return StopCast(self) end
-  if event == "PLAYER_TARGET_CHANGED" or event == "PLAYER_ENTERING_WORLD" then
+  if event == "PLAYER_TARGET_CHANGED" or event == "PLAYER_FOCUS_CHANGED"
+      or event == "PLAYER_ENTERING_WORLD" then
     return Refresh(self)
 
   end
   if unit ~= self.unit then return end
+
 
   if event == "UNIT_SPELLCAST_START" then
     self.activeCastID = lineID
@@ -226,10 +263,14 @@ local function Register(f)
   f:RegisterEvent("UNIT_SPELLCAST_CHANNEL_STOP")
   f:RegisterEvent("PLAYER_ENTERING_WORLD")
   if f.unit == "target" then f:RegisterEvent("PLAYER_TARGET_CHANGED") end
+  if f.unit == "focus" then f:RegisterEvent("PLAYER_FOCUS_CHANGED") end
+
   f:SetScript("OnEvent", OnEvent)
 end
 
--- Blizzard bars --------------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- 3. Blizzard bars
+-- ---------------------------------------------------------------------------
 local blizzHooked = false
 local function ApplyBlizzard()
   local show = J.db.blizzardCastbars and true or false
@@ -333,12 +374,39 @@ J:AddModule(function()
   end
   J:AnchorTargetCastbar(6)
 
+  -- Focus castbar: same height as the target bar, same width as the focus
+  -- unit frame. It follows the focus debuff rows (1px gap) exactly like the
+  -- target bar follows the target debuffs, and is driven by the same event
+  -- path, so it costs nothing while no focus cast is running.
+  local focusBar = CreateCastbar("JunkieFocusCastbar", "focus", FOCUS_W, TARGET_H)
+  J.focusCastbar = focusBar
+  focusBar.enabled = true
+  focusBar.jdrop = 1
+  Register(focusBar)
+
+  function J:AnchorFocusCastbar(drop)
+    if drop then focusBar.jdrop = drop end
+    focusBar:ClearAllPoints()
+    focusBar:SetBarSize(FOCUS_W, TARGET_H)
+    local anchor = _G["JunkieFocusFrame"]
+    if not anchor then return end
+    focusBar:SetPoint("TOP", anchor, "BOTTOM", 0, -(focusBar.jdrop or 1))
+  end
+  J:AnchorFocusCastbar()
+
+
+  function J:UpdateFocusCastbar()
+    Refresh(focusBar)
+  end
+
   function J:UpdateCastbars()
     playerBar.enabled = J.db.playerCastbar ~= false
     targetBar.enabled = J.db.targetCastbar ~= false
     Refresh(playerBar)
     Refresh(targetBar)
+    Refresh(focusBar)
     ApplyBlizzard()
   end
   J:UpdateCastbars()
 end)
+

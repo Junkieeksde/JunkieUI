@@ -14,12 +14,49 @@ Plug and play. No profiles.
   - Right side: Bar5, 12 buttons downward
   - Bar1 paging: `[stealth] 8; [stance:1] 7; [stance:2] 9; [stance:3] 10; [stance:4] 10`
 - Unit frames 250x40 (flat style) with target castbar and target auras
-- Player debuffs anchored right to left, 200px above the player frame
-- Chat in a dark box with the edit box directly below the chat
+- Player buffs/debuffs are Blizzard's own frames, reskinned square and docked
+  to the minimap
+- Chat left at Blizzard default apart from a dark backdrop
 
 ## Settings: `/jui`
 Player/target gap slider (1-500 with manual input), shared Y offset, power bar
-toggles, cooldown text and a movable quest tracker.
+toggles, tooltip anchor and a movable quest tracker.
+
+## Cooldown numbers
+JunkieUI and JunkieCD do not draw cooldown text. Install **OmniCC** - it paints
+the numbers straight onto the native cooldown swipe at no Lua cost.
+
+## Code layout
+Load order is fixed in `JunkieUI.toc`; `core.lua` must always load first.
+
+| File | Owns |
+| --- | --- |
+| `core.lua` | Namespace, saved variables, helpers, module registry |
+| `media.lua` | Font and statusbar texture registry |
+| `minimap.lua` | Square minimap, clock box, quest tracker lock |
+| `minimapbuttons.lua` | Addon minimap button collector |
+| `xp.lua` | XP / reputation bar |
+| `actionbars.lua` | Repositioning and reskinning Blizzard's bars |
+| `unitframes.lua` | Player / target / target-of-target / pet + target auras |
+| `castbars.lua` | Player and target castbars |
+| `blizzbuffs.lua` | Reskin + minimap docking of Blizzard's BuffFrame |
+| `chat.lua` | Dark chat backdrop |
+| `loot.lua` | Group loot roll stacking |
+| `tooltip.lua` | Draggable tooltip anchor |
+| `qol.lua` | Auto repair |
+| `config.lua` | `/jui` settings panel |
+
+Every module registers through `J:AddModule(fn)` and runs once at
+`PLAYER_LOGIN`, after saved variables exist.
+
+## Performance rules for future changes
+1. No permanent `OnUpdate`. A driver frame must hide itself when idle.
+2. Prefer events over polling. If you must poll, throttle and stop when there
+   is nothing to poll.
+3. Cache before you set. Never call `SetText` / `SetValue` / `SetVertexColor`
+   with a value that has not changed.
+4. Upvalue globals used inside any per-frame function.
+5. Cooldown numbers belong to OmniCC, not to this addon.
 
 ## Changelog
 

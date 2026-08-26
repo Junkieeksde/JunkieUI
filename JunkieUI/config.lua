@@ -1,4 +1,17 @@
--- /jui settings panel (flat dark theme)
+--[[---------------------------------------------------------------------------
+  JunkieUI - Settings panel (/jui)
+
+  Flat dark theme config UI. Every widget writes straight into J.db and calls
+  the matching J:Set* / refresh function, so there is no apply step.
+
+  Cost: the panel and all of its widgets are built on first open and reused
+  afterwards. Nothing in this file runs while the panel is closed.
+
+  Sections:
+    1. Combat lockout
+    2. Module API (closed): the cooldown manager is the only consumer
+    3. Minimap shortcut button (mirror of the minimap button collector)
+-------------------------------------------------------------------------------]]
 local J = JunkieUI
 
 local panel
@@ -353,9 +366,6 @@ local function BuildPanel()
   local function Select(index)
     for i, t in ipairs(tabs) do t.selected = (i == index); t:Refresh() end
     for i, p in ipairs(pages) do if i == index then p:Show() else p:Hide() end end
-    -- Size placeholders are only shown while the aura page is open.
-    local on = (index == 4)
-    if J.SetPlayerAuraPreview then J:SetPlayerAuraPreview(on) end
     if index == 10 and J.RefreshCDPage then J.RefreshCDPage() end
   end
   panel.SelectPage = Select
@@ -504,11 +514,6 @@ local function BuildPanel()
   end)
   y = y - 24
 
-  MakeCheck(u, "Show timers on target buffs and debuffs", y, J.db.targetAuraText, function(v)
-    J.db.targetAuraText = v
-  end)
-  y = y - 24
-
   MakeCheck(u, "Disable Ascension Resource bars", y, J.db.hideCoAResource, function(v)
     local old = J.db.hideCoAResource
     J.db.hideCoAResource = v
@@ -544,12 +549,8 @@ local function BuildPanel()
   local a = pages[3]
   y = -14
   Header(a, "Actionbars", y); y = y - 26
-  MakeCheck(a, "Show cooldown timers on action buttons", y, J.db.cooldownText, function(v)
-    J.db.cooldownText = v
-    J:ApplyCooldownText()
-    if J.RequireReload then J:RequireReload() end
-  end)
-  y = y - 24
+  Hint(a, "For cooldown text, use OmniCC.", y)
+  y = y - 22
   MakeCheck(a, "Show macro names on action buttons", y, J.db.macroText, function(v)
     J.db.macroText = v
     if J.ApplyMacroText then J:ApplyMacroText() end
@@ -560,12 +561,6 @@ local function BuildPanel()
     if J.ApplyBarBackground then J:ApplyBarBackground() end
     -- The docked castbar hugs the background plate, so it needs a re-anchor.
     if J.AnchorPlayerCastbar then J:AnchorPlayerCastbar() end
-  end)
-
-  y = y - 24
-  MakeCheck(a, "Mouseover: hide the action bars until hovered", y, J.db.barMouseover, function(v)
-    J.db.barMouseover = v
-    if J.ApplyBarMouseover then J:ApplyBarMouseover() end
   end)
 
 
@@ -598,154 +593,40 @@ local function BuildPanel()
     J.db.barLayout = key
     if J.ApplyBarLayout then J.ApplyBarLayout() end
   end)
+  y = y - 56
 
-  -- Page 4: Buffs & debuffs ------------------------------------------------
-  local bd = pages[4]
-  y = -14
-  Header(bd, "Player auras (under the minimap)", y); y = y - 22
-  Hint(bd, "Placeholders show the size while this page is open.", y); y = y - 22
-
-  MakeSlider(bd, "JunkieBuffSizeSlider", "Buff icon size", 16, 60, J.db.buffSize or 30, y, function(v)
-    J.db.buffSize = v
-    if J.UpdatePlayerAuraSizes then J:UpdatePlayerAuraSizes() end
-  end)
-  y = y - 44
-
-  MakeSlider(bd, "JunkieDebuffSizeSlider", "Debuff icon size", 16, 60, J.db.playerDebuffSize or 34, y, function(v)
-    J.db.playerDebuffSize = v
-    if J.UpdatePlayerAuraSizes then J:UpdatePlayerAuraSizes() end
+  -- Size: four fixed steps so the button edge always lands on a whole pixel.
+  local BAR_SCALE_STEPS = { 100, 90, 80, 70 }
+  local curScale = J.db.barScale or 100
+  local curStep = 1
+  for i = 1, #BAR_SCALE_STEPS do
+    if BAR_SCALE_STEPS[i] == curScale then curStep = i end
+  end
+  Header(a, "Size", y); y = y - 22
+  Hint(a, "Step 1 = 100%, 2 = 90%, 3 = 80%, 4 = 70%.", y); y = y - 24
+  MakeSlider(a, "JunkieBarScaleSlider", "Action bar size", 1, 4, curStep, y, function(v)
+    local pct = BAR_SCALE_STEPS[v] or 100
+    if J.db.barScale == pct then return end
+    J.db.barScale = pct
+    if J.ApplyBarLayout then J.ApplyBarLayout() end
   end)
   y = y - 50
 
-  Header(bd, "Debuff placement", y); y = y - 26
-  MakeCheck(bd, "Move your debuffs above the player frame", y, J.db.debuffsOnFrame, function(v)
-    J.db.debuffsOnFrame = v
-    if J.UpdateDebuffPlacement then J:UpdateDebuffPlacement() end
+
+
+  -- Page 4: Buffs & debuffs ------------------------------------------------
+  -- The player's auras are Blizzard's own (C-driven) frame, only re-dressed by
+  -- blizzbuffs.lua. Nothing on this page costs anything per frame.
+  local bd = pages[4]
+  y = -14
+  Header(bd, "Player auras", y); y = y - 22
+  Hint(bd, "Squared-off Blizzard buffs, docked to the left of the minimap.", y); y = y - 28
+
+  MakeSlider(bd, "JunkieBuffScaleSlider", "Aura size (%)", 70, 150, J.db.buffScale or 100, y, function(v)
+    J.db.buffScale = v
+    if J.ApplyBuffScale then J:ApplyBuffScale() end
   end)
-  y = y - 40
-
-  -- Blacklist ----------------------------------------------------------------
-  -- Stored as a hash map (JunkieUIDB.debuffBlacklist[spellID] = true) so the
-  -- aura refresh can test membership in O(1). This panel only ever touches the
-  -- table on a click / Enter press; nothing here runs per frame.
-  Header(bd, "Blacklist debuffs", y); y = y - 24
-  Hint(bd, "Type an aura ID and press Enter to hide that debuff.", y); y = y - 22
-
-  local blBox = CreateFrame("Frame", nil, bd)
-  blBox:SetSize(120, 22)
-  blBox:SetPoint("TOPLEFT", bd, "TOPLEFT", 16, y)
-  Flat(blBox, BG[1], BG[2], BG[3], 1)
-
-  local blEdit = CreateFrame("EditBox", nil, blBox)
-  blEdit:SetPoint("TOPLEFT", blBox, 5, -1)
-  blEdit:SetPoint("BOTTOMRIGHT", blBox, -5, 1)
-  blEdit:SetFont(J.font, 11)
-  blEdit:SetJustifyH("LEFT")
-  blEdit:SetAutoFocus(false)
-  blEdit:SetNumeric(true)          -- digits only: no bad input can reach the db
-  blEdit:SetMaxLetters(9)
-  blEdit:SetTextInsets(0, 0, 0, 0)
-  blEdit:SetTextColor(TXT[1], TXT[2], TXT[3])
-  blEdit:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-
-  local BL_ROWS, BL_ROW_H = 12, 18
-  local blList = CreateFrame("Frame", nil, bd)
-  blList:SetPoint("TOPLEFT", bd, "TOPLEFT", 16, y - 30)
-  blList:SetSize(220, BL_ROWS * BL_ROW_H)
-
-  local blEmpty = Label(blList, 11, "LEFT")
-  blEmpty:SetPoint("TOPLEFT", blList, "TOPLEFT", 0, -2)
-  blEmpty:SetText("No debuffs blacklisted.")
-  blEmpty:SetTextColor(DIM[1], DIM[2], DIM[3])
-
-  local blRows, blIDs, blOffset = {}, {}, 0
-  local RefreshBlacklist
-
-  local function BlacklistRow(i)
-    local row = blRows[i]
-    if row then return row end
-    row = CreateFrame("Frame", nil, blList)
-    row:SetSize(220, BL_ROW_H - 2)
-    row:SetPoint("TOPLEFT", blList, "TOPLEFT", 0, -(i - 1) * BL_ROW_H)
-
-    row.text = Label(row, 11, "LEFT")
-    row.text:SetPoint("LEFT", row, "LEFT", 0, 0)
-
-    row.del = MakeButton(row, "x", 16, 16, function(self)
-      local id = self:GetParent().auraID
-      if id and J.db.debuffBlacklist then
-        J.db.debuffBlacklist[id] = nil
-        if J.UpdateDebuffBlacklist then J:UpdateDebuffBlacklist() end
-        RefreshBlacklist()
-      end
-    end)
-    row.del:SetPoint("LEFT", row, "LEFT", 92, 0)
-
-    blRows[i] = row
-    return row
-  end
-
-  -- Rebuilds the visible rows from the hash map. Called only on add/remove and
-  -- when the panel is first built.
-  function RefreshBlacklist()
-    for i = #blIDs, 1, -1 do blIDs[i] = nil end
-    local t = J.db.debuffBlacklist
-    if type(t) == "table" then
-      for id in pairs(t) do
-        if type(id) == "number" then blIDs[#blIDs + 1] = id end
-      end
-      table.sort(blIDs)
-    end
-
-    local total = #blIDs
-    local maxOffset = total - BL_ROWS
-    if maxOffset < 0 then maxOffset = 0 end
-    if blOffset > maxOffset then blOffset = maxOffset end
-
-    for i = 1, BL_ROWS do
-      local id = blIDs[i + blOffset]
-      if id then
-        local row = BlacklistRow(i)
-        row.auraID = id
-        row.text:SetText("Aura " .. id)
-        row:Show()
-      elseif blRows[i] then
-        blRows[i].auraID = nil
-        blRows[i]:Hide()
-      end
-    end
-
-    if total > 0 then blEmpty:Hide() else blEmpty:Show() end
-  end
-
-  blList:EnableMouseWheel(true)
-  blList:SetScript("OnMouseWheel", function(self, delta)
-    local maxOffset = #blIDs - BL_ROWS
-    if maxOffset < 1 then return end
-    blOffset = blOffset - delta
-    if blOffset < 0 then blOffset = 0 end
-    if blOffset > maxOffset then blOffset = maxOffset end
-    RefreshBlacklist()
-  end)
-
-  local function AddBlacklistID()
-    local id = tonumber(blEdit:GetText())
-    blEdit:SetText("")
-    blEdit:ClearFocus()
-    if not id or id <= 0 then return end
-    id = math.floor(id)
-    if type(J.db.debuffBlacklist) ~= "table" then J.db.debuffBlacklist = {} end
-    J.db.debuffBlacklist[id] = true
-    if J.UpdateDebuffBlacklist then J:UpdateDebuffBlacklist() end
-    RefreshBlacklist()
-  end
-
-  blEdit:SetScript("OnEnterPressed", AddBlacklistID)
-
-  local blAdd = MakeButton(bd, "Add", 60, 22, AddBlacklistID)
-  blAdd:SetPoint("LEFT", blBox, "RIGHT", 8, 0)
-
-  RefreshBlacklist()
+  y = y - 50
 
   -- Page 5: Minimap ---------------------------------------------------------
   local mm = pages[5]
@@ -763,6 +644,10 @@ local function BuildPanel()
   local m = pages[6]
   y = -14
   Header(m, "Movable frames", y); y = y - 26
+  MakeCheck(m, "Unlock the focus frame so you can drag it", y, J.db.focusUnlocked, function(v)
+    if J.SetFocusUnlocked then J:SetFocusUnlocked(v) else J.db.focusUnlocked = v end
+  end)
+  y = y - 24
   MakeCheck(m, "Unlock the quest tracker so you can drag it", y, J.db.watchUnlocked, function(v)
     if J.SetWatchUnlocked then J:SetWatchUnlocked(v) else J.db.watchUnlocked = v end
   end)
@@ -788,11 +673,6 @@ local function BuildPanel()
   Header(tt, "Tooltip", y); y = y - 26
   MakeCheck(tt, "Unlock the tooltip so you can drag it", y, J.db.tooltipUnlocked, function(v)
     if J.SetTooltipAnchorUnlocked then J:SetTooltipAnchorUnlocked(v) else J.db.tooltipUnlocked = v end
-  end)
-  y = y - 24
-  MakeCheck(tt, "Tooltip follows the mouse", y, J.db.tooltipMouse, function(v)
-    J.db.tooltipMouse = v
-    if J.RequireReload then J:RequireReload() end
   end)
   y = y - 24
   MakeCheck(tt, "Show spell and aura IDs in tooltips", y, J.db.tooltipIDs, function(v)
@@ -953,13 +833,12 @@ local function BuildPanel()
 
 
   Select(1)
-  panel:HookScript("OnHide", function()
-    if J.SetPlayerAuraPreview then J:SetPlayerAuraPreview(false) end
-  end)
   panel:Hide()
 end
 
--- Combat lockout ------------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- 1. Combat lockout
+-- ---------------------------------------------------------------------------
 local inCombat = false
 
 local function IsInCombat()
@@ -1013,7 +892,9 @@ function J:CloseConfig()
   if panel then panel:Hide() end
 end
 
--- Module API (closed): the cooldown manager is the only consumer -------------
+-- ---------------------------------------------------------------------------
+-- 2. Module API (closed): the cooldown manager is the only consumer
+-- ---------------------------------------------------------------------------
 -- JunkieCD hands us a builder; we call it the first time its page is opened.
 function J:RegisterCooldownManagerPanel(builder)
   J.cdBuilder = builder
@@ -1062,7 +943,9 @@ end
 
 
 
--- Minimap shortcut button (mirror of the minimap button collector) -----------
+-- ---------------------------------------------------------------------------
+-- 3. Minimap shortcut button (mirror of the minimap button collector)
+-- ---------------------------------------------------------------------------
 J:AddModule(function()
   local b = CreateFrame("Button", "JunkieConfigButton", JunkieClock or Minimap)
   b:SetSize(18, 18)
