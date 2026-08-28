@@ -65,6 +65,38 @@ local function Flat(f, r, g, b, a)
   return f
 end
 
+-- Canvas pixel borders.
+-- A backdrop edge is measured in the frame's own units, so once the canvas is
+-- scaled down a 1 unit border can end up thinner than one real screen pixel
+-- and simply stops being drawn. Every canvas frame with a hairline border is
+-- registered here and its edgeSize is re-derived (in local units) to exactly
+-- one physical pixel whenever the canvas scale changes.
+local pixelBorders = {}
+local function RegisterPixelBorder(f, mult)
+  f.jcdEdgeMult = mult or 1
+  pixelBorders[#pixelBorders + 1] = f
+  return f
+end
+local function ApplyPixelBorders(unit)
+  if not unit or unit <= 0 then return end
+  for i = 1, #pixelBorders do
+    local f = pixelBorders[i]
+    local bd = f:GetBackdrop()
+    if bd then
+      local want = unit * (f.jcdEdgeMult or 1)
+      if math.abs((bd.edgeSize or 1) - want) > 0.01 then
+        -- SetBackdrop resets the colours, so they are carried over by hand.
+        local br, bg, bb, ba = f:GetBackdropColor()
+        local er, eg, eb, ea = f:GetBackdropBorderColor()
+        bd.edgeSize = want
+        f:SetBackdrop(bd)
+        if br then f:SetBackdropColor(br, bg, bb, ba) end
+        if er then f:SetBackdropBorderColor(er, eg, eb, ea) end
+      end
+    end
+  end
+end
+
 local function Header(parent, text, y)
   local fs = Label(parent, 11, "LEFT")
   fs:SetPoint("TOPLEFT", parent, "TOPLEFT", 14, y)
@@ -368,18 +400,31 @@ local function MakeSlider(parent, label, minV, maxV, y, get, onChange, x, w)
   thumb:SetVertexColor(ACCENT[1], ACCENT[2], ACCENT[3], 1)
   ClickToSlide(s, minV, maxV)
 
+  -- The value box is a real edit box: the number can be typed in directly and
+  -- is clamped to the slider range on Enter.
   local box = CreateFrame("Frame", nil, parent)
   box:SetSize(48, 20)
   box:SetPoint("LEFT", track, "RIGHT", 10, 0)
   Flat(box, BG[1], BG[2], BG[3], 1)
-  local val = Label(box, 11, "CENTER")
-  val:SetPoint("CENTER")
+  local val = CreateFrame("EditBox", nil, box)
+  val:SetPoint("TOPLEFT", box, 3, -1)
+  val:SetPoint("BOTTOMRIGHT", box, -3, 1)
+  val:SetFont(C.font, 11)
+  val:SetJustifyH("CENTER")
+  val:SetAutoFocus(false)
+  val:SetMaxLetters(6)
+  val:SetTextInsets(0, 0, 0, 0)
+  val:SetTextColor(TXT[1], TXT[2], TXT[3])
+  val:SetScript("OnEscapePressed", function(self)
+    self:SetText(tostring(math.floor((s:GetValue() or get()) + 0.5)))
+    self:ClearFocus()
+  end)
 
   s:SetValue(get())
   val:SetText(tostring(get()))
   s:SetScript("OnValueChanged", function(self, v)
     v = math.floor(v + 0.5)
-    val:SetText(tostring(v))
+    if not val:HasFocus() then val:SetText(tostring(v)) end
   end)
   -- A full bar rebuild for every pixel crossed while dragging caused visible
   -- stutter. Keep the number live, but commit the setting once on release.
@@ -388,10 +433,24 @@ local function MakeSlider(parent, label, minV, maxV, y, get, onChange, x, w)
     val:SetText(tostring(v))
     onChange(v)
   end)
+  -- Typed value: clamp, move the thumb, commit once.
+  val:SetScript("OnEnterPressed", function(self)
+    local v = tonumber(self:GetText())
+    if v then
+      v = math.max(minV, math.min(maxV, math.floor(v + 0.5)))
+      s:SetValue(v)
+      self:SetText(tostring(v))
+      onChange(v)
+    else
+      self:SetText(tostring(math.floor((s:GetValue() or get()) + 0.5)))
+    end
+    self:ClearFocus()
+  end)
   table.insert(refreshers, function()
     s:SetValue(get())
-    val:SetText(tostring(get()))
+    if not val:HasFocus() then val:SetText(tostring(get())) end
   end)
+
   s.titleFS = title
   s.track = track
   s.valueBox = box
@@ -1204,6 +1263,7 @@ local function MakeGrid(parent, x, y, bag)
       b:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = pixel })
       b:SetBackdropColor(BG[1], BG[2], BG[3], 1)
     end
+    RegisterPixelBorder(b)
     b:SetBackdropBorderColor(EDGE_OFF[1], EDGE_OFF[2], EDGE_OFF[3], 1)
     AddHover(b, pixel)
 
@@ -1659,7 +1719,9 @@ local function BuildPanel(host)
 
   -- Everything the canvas draws lives in one scaled container so the mockups
   -- read a little larger than the surrounding chrome.
-  local CANVAS_SCALE = 0.75
+  -- Design scale of the mockup block. Bumped 5% so the canvas elements read
+  -- a little larger inside the same preview box.
+  local CANVAS_SCALE = 0.75 * 1.05
   local content = CreateFrame("Frame", nil, preview)
   content:SetScale(CANVAS_SCALE)
 
@@ -1676,24 +1738,57 @@ local function BuildPanel(host)
     resH = tonumber(resH) or 768
     return 768 / resH
   end
+  -- Natural size of the mockup block in canvas units. Filled in once the
+  -- elements below exist; until then the fit clamp is simply inactive.
+  local designW, designH = 0, 0
   local function ApplyPixelLock()
     local perfect = PhysicalPixel()
     local parentScale = preview:GetEffectiveScale() or 1
     if parentScale <= 0 then parentScale = 1 end
-    -- Desired effective scale, rounded to a whole number of real pixels.
-    local units = math.floor((CANVAS_SCALE * parentScale) / perfect + 0.5)
-    if units < 1 then units = 1 end
-    local target = units * perfect
-    content:SetScale(target / parentScale)
+    -- The canvas must never draw wider than the preview box it sits in. On a
+    -- low resolution the window is scaled up (and the physical pixel is
+    -- larger), so a fixed 0.75 pushed the outer mockups past the border. The
+    -- wanted scale is therefore the design scale capped by what actually fits.
+    local fit = CANVAS_SCALE
+    if designW > 0 then fit = math.min(fit, width / designW) end
+    if designH > 0 then fit = math.min(fit, PREVIEW_H / designH) end
+    -- The canvas keeps the wanted scale instead of being snapped down to a
+    -- whole pixel step: that snap could throw away a third of the size on
+    -- some resolutions. Sharpness is handled where it actually matters, by
+    -- re-deriving every hairline border to one real pixel at this scale.
+    local scale = fit
+    if scale <= 0 then scale = CANVAS_SCALE end
+    content:SetScale(scale)
+    ApplyPixelBorders(perfect / (scale * parentScale))
+    -- The preview box itself lives one level up, at the window's own scale.
+    local pbd = preview:GetBackdrop()
+    if pbd then
+      local want = perfect / parentScale
+      if math.abs((pbd.edgeSize or 1) - want) > 0.01 then
+        local br, bg, bb, ba = preview:GetBackdropColor()
+        local er, eg, eb, ea = preview:GetBackdropBorderColor()
+        pbd.edgeSize = want
+        preview:SetBackdrop(pbd)
+        if br then preview:SetBackdropColor(br, bg, bb, ba) end
+        if er then preview:SetBackdropBorderColor(er, eg, eb, ea) end
+      end
+    end
     -- The container itself must also start on a whole screen pixel, otherwise
     -- the whole grid inside it is offset by a fraction.
-    local w = math.floor(width / (target / parentScale) + 0.5)
-    local h = math.floor(PREVIEW_H / (target / parentScale) + 0.5)
+    local w = math.floor(width / scale + 0.5)
+    local h = math.floor(PREVIEW_H / scale + 0.5)
     content:SetSize(w, h)
-    local offX = math.floor((width - w * (target / parentScale)) / 2 + 0.5)
+    local offX = math.floor((width - w * scale) / 2 + 0.5)
     local offY = math.floor(PREVIEW_H * 0.10 + 0.5) - 20
     content:ClearAllPoints()
     content:SetPoint("TOPLEFT", preview, "TOPLEFT", offX, -offY)
+  end
+  -- Called once the design size is known, and whenever the box or the client
+  -- resolution changes. Everything inside is anchored to the container, so a
+  -- rescale is a single pass with no per-element work.
+  local function SetCanvasDesignSize(w, h)
+    designW, designH = w or 0, h or 0
+    ApplyPixelLock()
   end
   local function Snap(v)
     v = tonumber(v) or 0
@@ -2060,6 +2155,7 @@ local function BuildPanel(host)
     local b
     b = MakeButton(content, "", w, h, function() SelectElement(b); if onClick then onClick() end end)
     b:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = PX_STEP })
+    RegisterPixelBorder(b)
     b.mock = { MOCK_OFF[1], MOCK_OFF[2], MOCK_OFF[3] }
     b.on = true
     -- An inactive bar carries the same subtle (+) as an empty icon slot instead
@@ -2228,6 +2324,7 @@ local function BuildPanel(host)
   playerFrame:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = PX_STEP })
   playerFrame:SetBackdropColor(MOCK_OFF[1], MOCK_OFF[2], MOCK_OFF[3], 1)
   playerFrame:SetBackdropBorderColor(EDGE_DARK[1], EDGE_DARK[2], EDGE_DARK[3], 1)
+  RegisterPixelBorder(playerFrame)
   playerFrame.Refresh = function() end
   playerFrame:EnableMouse(false)
   playerFrame:SetScript("OnEnter", nil)
@@ -2241,6 +2338,7 @@ local function BuildPanel(host)
   targetFrame:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = PX_STEP })
   targetFrame:SetBackdropColor(MOCK_OFF[1], MOCK_OFF[2], MOCK_OFF[3], 1)
   targetFrame:SetBackdropBorderColor(EDGE_DARK[1], EDGE_DARK[2], EDGE_DARK[3], 1)
+  RegisterPixelBorder(targetFrame)
   targetFrame.Refresh = function() end
   targetFrame:EnableMouse(false)
   targetFrame:SetScript("OnEnter", nil)
@@ -2251,6 +2349,18 @@ local function BuildPanel(host)
   RegisterElement(targetFrame)
   targetFrame:SetPoint("LEFT", mainGrid, "RIGHT", PX_STEP * 10, UF_Y)
   targetFrame.text:SetTextColor(ACCENT[1], ACCENT[2], ACCENT[3])
+
+  -- Widest thing the canvas ever draws: the main cooldown row with a unit
+  -- frame mockup on each side, plus a small breathing margin. Handing it to
+  -- the pixel lock makes the whole canvas shrink as one on small screens
+  -- instead of letting the outer frames slide past the preview border.
+  SetCanvasDesignSize(GRID_W + 2 * (UF_W + PX_STEP * 10) + 16, 0)
+  -- A resolution or UI-scale change moves the pixel size under us, so the fit
+  -- is recomputed. Both events are rare; the pass is a single SetScale.
+  local canvasScaleWatch = CreateFrame("Frame")
+  canvasScaleWatch:RegisterEvent("DISPLAY_SIZE_CHANGED")
+  canvasScaleWatch:RegisterEvent("UI_SCALE_CHANGED")
+  canvasScaleWatch:SetScript("OnEvent", ApplyPixelLock)
 
   -- The two extra cooldown bars are glued to the player frame corners.
   local upGrid = GridModule(6, {
@@ -2737,7 +2847,9 @@ local function BuildPanel(host)
     function() return BarCfg().classColor end,
     function(v) BarCfg().classColor = v and true or false; C:Rebuild(); C:RefreshConfig() end)
 
-  -- Filled colour: one swatch is shown, the rest unfold on click.
+  -- Colour palette: one swatch is shown, the rest unfold on click. The block is
+  -- built by a factory so the fill colour and the low-warning colour can share
+  -- exactly the same widget without duplicating it.
   local COLORS = {
     { 0.871, 0.447, 0.188 }, { 1.00, 0.82, 0.00 }, { 1.00, 0.96, 0.41 }, { 0.95, 0.85, 0.30 },
     { 1.00, 0.49, 0.04 }, { 1.00, 0.24, 0.17 }, { 0.78, 0.20, 0.20 }, { 0.64, 0.19, 0.79 },
@@ -2749,52 +2861,95 @@ local function BuildPanel(host)
     { 0.28, 0.28, 0.28 }, { 0.08, 0.08, 0.08 },
   }
 
-  local paletteOpen = false
-  local colorBlock = CreateFrame("Frame", nil, po)
-  colorBlock:SetSize((po:GetWidth() or 620) - 28, 30)
-  colorBlock:SetPoint("TOPLEFT", po, "TOPLEFT", 16, -400)
+  local function MakePalette(labelText, getColor, setColor)
+    local block = CreateFrame("Frame", nil, po)
+    block:SetSize((po:GetWidth() or 620) - 28, 30)
+    block:SetPoint("TOPLEFT", po, "TOPLEFT", 16, -400)
+    block.open = false
 
-  local swatchLabel = Label(colorBlock, 11, "LEFT")
-  swatchLabel:SetPoint("TOPLEFT", colorBlock, "TOPLEFT", 0, 0)
-  swatchLabel:SetText("Filled colour")
+    local swatchLabel = Label(block, 11, "LEFT")
+    swatchLabel:SetPoint("TOPLEFT", block, "TOPLEFT", 0, 0)
+    swatchLabel:SetText(labelText)
 
-  local current = CreateFrame("Button", nil, colorBlock)
-  current:SetSize(22, 22)
-  current:SetPoint("TOPLEFT", colorBlock, "TOPLEFT", 100, 2)
-  Flat(current, 1, 1, 1, 1)
-  local currentHint = Label(colorBlock, 10, "LEFT")
-  currentHint:SetPoint("LEFT", current, "RIGHT", 8, 0)
-  currentHint:SetTextColor(DIM[1], DIM[2], DIM[3])
+    local current = CreateFrame("Button", nil, block)
+    current:SetSize(22, 22)
+    current:SetPoint("TOPLEFT", block, "TOPLEFT", 100, 2)
+    Flat(current, 1, 1, 1, 1)
+    local currentHint = Label(block, 10, "LEFT")
+    currentHint:SetPoint("LEFT", current, "RIGHT", 8, 0)
+    currentHint:SetTextColor(DIM[1], DIM[2], DIM[3])
 
-  local swatches = {}
-  for i, col in ipairs(COLORS) do
-    local sw = CreateFrame("Button", nil, colorBlock)
-    sw:SetSize(18, 18)
-    local cIdx = (i - 1) % 15
-    local rIdx = math.floor((i - 1) / 15)
-    sw:SetPoint("TOPLEFT", colorBlock, "TOPLEFT", cIdx * 21, -30 - rIdx * 21)
-    Flat(sw, col[1], col[2], col[3], 1)
-    sw:Hide()
-    sw:SetScript("OnClick", function()
+    local swatches = {}
+    for i, col in ipairs(COLORS) do
+      local sw = CreateFrame("Button", nil, block)
+      sw:SetSize(18, 18)
+      local cIdx = (i - 1) % 15
+      local rIdx = math.floor((i - 1) / 15)
+      sw:SetPoint("TOPLEFT", block, "TOPLEFT", cIdx * 21, -30 - rIdx * 21)
+      Flat(sw, col[1], col[2], col[3], 1)
+      sw:Hide()
+      sw:SetScript("OnClick", function()
+        setColor(col)
+        block.open = false
+        C:Rebuild()
+        C:RefreshConfig()
+      end)
+      swatches[i] = sw
+    end
+
+    current:SetScript("OnClick", function()
+      block.open = not block.open
+      C:RefreshConfig()
+    end)
+
+    function block:SetY(ny)
+      self:ClearAllPoints()
+      self:SetPoint("TOPLEFT", po, "TOPLEFT", 16, ny)
+    end
+
+    -- Called from the page refresher: keeps the swatch, the hint and the
+    -- selection border in sync with whatever colour the bar carries now.
+    function block:Sync(visible)
+      self.blockHeight = self.open and 110 or 34
+      local cur = getColor() or ACCENT
+      current:SetBackdropColor(cur[1], cur[2], cur[3], 1)
+      currentHint:SetText(self.open and "Pick a colour" or "Click the colour to pick another one")
+      for i, sw in ipairs(swatches) do
+        if self.open and visible then sw:Show() else sw:Hide() end
+        local col = COLORS[i]
+        local sel = math.abs(col[1] - cur[1]) < 0.01 and math.abs(col[2] - cur[2]) < 0.01
+          and math.abs(col[3] - cur[3]) < 0.01
+        sw:SetBackdropBorderColor(sel and ACCENT[1] or 0.18, sel and ACCENT[2] or 0.17, sel and ACCENT[3] or 0.14, 1)
+      end
+    end
+    return block
+  end
+
+  local colorBlock = MakePalette("Filled colour",
+    function() return C:BarColor(BarCfg()) end,
+    function(col)
       local cfg = BarCfg()
       cfg.color = { col[1], col[2], col[3] }
       cfg.classColor = false
-      paletteOpen = false
-      C:Rebuild()
-      C:RefreshConfig()
     end)
-    swatches[i] = sw
-  end
 
-  current:SetScript("OnClick", function()
-    paletteOpen = not paletteOpen
-    C:RefreshConfig()
-  end)
+  -- Low warning ----------------------------------------------------------------
+  -- Resource bars turn colour under a chosen percentage, combo bars turn colour
+  -- while only a few points are still lit.
+  local warnCheck = MakeCheck(po, "Warn me when it runs low", y,
+    function() return BarCfg().warnEnabled end,
+    function(v) BarCfg().warnEnabled = v and true or false; C:Rebuild(); C:RefreshConfig() end)
+  local warnPctSlider = MakeSlider(po, "Warn at or below (% of the bar)", 1, 99, y,
+    function() return BarCfg().warnPct or 30 end,
+    function(v) BarCfg().warnPct = math.max(1, math.min(99, v)); C:Rebuild() end, 16, 240)
+  local warnCountSlider = MakeSlider(po, "Warn while this many points or fewer are lit", 1, 20, y,
+    function() return BarCfg().warnCount or 2 end,
+    function(v) BarCfg().warnCount = math.max(1, math.min(20, v)); C:Rebuild() end, 16, 240)
+  local warnColorBlock = MakePalette("Warning colour",
+    function() return C:BarWarnColor(BarCfg()) end,
+    function(col) BarCfg().warnColor = { col[1], col[2], col[3] } end)
 
-  function colorBlock:SetY(ny)
-    self:ClearAllPoints()
-    self:SetPoint("TOPLEFT", po, "TOPLEFT", 16, ny)
-  end
+
 
   -- Page 8 is no longer its own section: combo points are one of the two modes
   -- a bar slot can be set to.
@@ -2807,7 +2962,10 @@ local function BuildPanel(host)
     local isCombo = cfg.kind == "combo"
     local isResource = not isCombo
     local other = isResource and cfg.resource == "OTHER"
-    colorBlock.blockHeight = paletteOpen and 110 or 34
+    local colorVisible = on and (isCombo or other) and not cfg.classColor
+    local warnVisible = on and (cfg.warnEnabled and true or false)
+    colorBlock:Sync(colorVisible)
+    warnColorBlock:Sync(warnVisible)
     barHeader:SetText("Bar slot " .. (C.editBarSlot or 1) .. " settings")
     Reflow(powerTop, {
       { barHeader, true },
@@ -2830,19 +2988,13 @@ local function BuildPanel(host)
       { comboChargeCheck, on and isCombo },
       { comboChargeField, on and isCombo and (cfg.useCharges and true or false) },
       { classColorCheck, on and (isCombo or other) },
-      { colorBlock, on and (isCombo or other) and not cfg.classColor },
+      { colorBlock, colorVisible },
+      { warnCheck, on },
+      { warnPctSlider, warnVisible and isResource },
+      { warnCountSlider, warnVisible and isCombo },
+      { warnColorBlock, warnVisible },
     })
 
-    local cur = C:BarColor(cfg) or ACCENT
-    current:SetBackdropColor(cur[1], cur[2], cur[3], 1)
-    currentHint:SetText(paletteOpen and "Pick a colour" or "Click the colour to pick another one")
-    for i, sw in ipairs(swatches) do
-      if paletteOpen and on and not cfg.classColor then sw:Show() else sw:Hide() end
-      local col = COLORS[i]
-      local sel = math.abs(col[1] - cur[1]) < 0.01 and math.abs(col[2] - cur[2]) < 0.01
-        and math.abs(col[3] - cur[3]) < 0.01
-      sw:SetBackdropBorderColor(sel and ACCENT[1] or 0.18, sel and ACCENT[2] or 0.17, sel and ACCENT[3] or 0.14, 1)
-    end
   end)
   PageOK(po)
   PageOK(cpPage)

@@ -220,6 +220,15 @@ function C:NewBar(kind)
     comboAuraType = nil,             -- HELPFUL = buff, HARMFUL = debuff (nil = legacy)
     classColor = false,
     color = { C.ACCENT[1], C.ACCENT[2], C.ACCENT[3] },
+    -- Low warning ------------------------------------------------------------
+    -- Resource mode: the fill turns to warnColor at or below warnPct percent.
+    -- Combo mode: the lit points turn to warnColor while only warnCount (or
+    -- fewer) of them are lit.
+    warnEnabled = false,
+    warnPct = 30,                    -- 1..99 %
+    warnCount = 2,                   -- 1..20 lit points
+    warnColor = { 1.00, 0.24, 0.17 },
+
   }
 end
 
@@ -241,6 +250,14 @@ function C:BarColor(bar)
   end
   return bar.color or C.ACCENT
 end
+
+-- Colour a bar switches to while its "warn me when it runs low" rule is met.
+function C:BarWarnColor(bar)
+  bar = bar or {}
+  return bar.warnColor or { 1.00, 0.24, 0.17 }
+end
+
+
 
 local VALID_KIND = { resource = true, combo = true }
 
@@ -303,6 +320,12 @@ function C:MigrateBars(set, combo)
       b.comboAuraType = b.onTarget and "HARMFUL" or "HELPFUL"
     end
     if type(b.color) ~= "table" then b.color = { C.ACCENT[1], C.ACCENT[2], C.ACCENT[3] } end
+    -- Low warning: clamped once here so the update loops never have to.
+    b.warnEnabled = b.warnEnabled and true or false
+    b.warnPct = math.max(1, math.min(99, tonumber(b.warnPct) or 30))
+    b.warnCount = math.max(1, math.min(20, tonumber(b.warnCount) or 2))
+    if type(b.warnColor) ~= "table" then b.warnColor = { 1.00, 0.24, 0.17 } end
+
   end
   for i = C.MAX_BARS + 1, #set.bars do set.bars[i] = nil end
   return set.bars

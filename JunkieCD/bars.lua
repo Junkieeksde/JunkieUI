@@ -36,7 +36,11 @@ local UnitExists, UnitPower, UnitPowerMax = UnitExists, UnitPower, UnitPowerMax
 local CreateFrame, pairs, ipairs, pcall, type, tonumber = CreateFrame, pairs, ipairs, pcall, type, tonumber
 
 local GAP = 1
-local ROW_GAP = 45
+-- Distance from the topmost visible element up to the aura group, and the
+-- height the docked player castbar takes when it is switched on.
+local AURA_GAP = 20
+local CASTBAR_DOCK_H = 35
+
 -- The four cooldown canvases, in the order they are drawn.
 local SET_KEYS = { "main", "sub", "up", "down" }
 local AURA_UNITS = { "player", "target", "pet", "focus" }
@@ -654,12 +658,17 @@ function C:Rebuild()
           -- A custom resource keeps the profile colour so it can be told apart
           -- from the class resources.
           local col = C:BarColor(cfg)
-          slot.bar:SetStatusBarColor(col[1], col[2], col[3])
+          slot.baseColor = col
           slot.powerKey = nil
         else
-          slot.bar:SetStatusBarColor(info.color[1], info.color[2], info.color[3])
+          slot.baseColor = info.color
           slot.powerKey = info.key
         end
+        -- The low warning repaints this bar from UpdatePower, so the normal
+        -- colour is remembered here and the warn state starts clean.
+        slot.warnOn = nil
+        slot.bar:SetStatusBarColor(slot.baseColor[1], slot.baseColor[2], slot.baseColor[3])
+
         -- The value always sits dead centre of the bar.
         local fontSize = math.max(7, math.min(13, bh - 4))
         slot.text:SetFont(C.font, fontSize, "OUTLINE")
@@ -676,8 +685,13 @@ function C:Rebuild()
     end
   end
 
-  -- Aura rows anchor 60px above the top element, growing upwards. Their width
-  -- is dynamic so layout happens in C:UpdateAuras().
+  -- The aura rows are one group that always sits AURA_GAP above whatever the
+  -- topmost visible element happens to be: the icon row when no resource bars
+  -- are on, otherwise the highest enabled bar slot, and the docked player
+  -- castbar on top of that. The gap no longer has to leave room for bars that
+  -- are switched off, so nothing empty is left between the rows and the icons.
+  local topGap = AURA_GAP
+  if p.castbarTop then topGap = topGap + CASTBAR_DOCK_H + 1 end
   local asize = p.auraSize or 35
   -- The reminder row (4) carries its own size so it can read larger or smaller
   -- than the aura rows.
@@ -694,7 +708,8 @@ function C:Rebuild()
       -- Missing buff reminders live at the top of the screen, on their own.
       holder:SetPoint("TOP", UIParent, "TOP", 0, -(p.missingY or 120))
     elseif i == 1 then
-      holder:SetPoint("BOTTOM", top, "TOP", 0, ROW_GAP)
+      holder:SetPoint("BOTTOM", top, "TOP", 0, topGap)
+
     else
       holder:SetPoint("BOTTOM", rows[i - 1], "TOP", 0, GAP)
     end
@@ -986,9 +1001,9 @@ local function UpdateCDIcon(f, profile)
     -- default, or a separate aura id when the charges live on another buff.
     if entry.stacksEnabled and FindAura then
       local sid = tonumber(entry.stackAuraID) or shownEntry.id
-      local _, cnt = FindAura("player", "HELPFUL", sid)
+      local _, cnt = FindAura("player", "HELPFUL", sid, true)
       if not cnt then
-        local _, cnt2 = FindAura("player", "HARMFUL", sid)
+        local _, cnt2 = FindAura("player", "HARMFUL", sid, true)
         cnt = cnt2
       end
       stacks = cnt or 0
@@ -1186,7 +1201,6 @@ end
 local function ApplyOverlay(id, on)
   id = tonumber(id) or id
   if not id then return end
-  local alertName = GetSpellInfo(id)
   local profile = C:Profile()
   for l = 1, #iconLists do
     local list = iconLists[l]
@@ -1194,9 +1208,9 @@ local function ApplyOverlay(id, on)
       local f = list[i]
       local e = f.entry
       if e and e.kind ~= "item" and e.kind ~= "trinket" and e.id then
-        -- Match on id, and on name too: a ranked spell carries a different id
-        -- than the alert the client sends.
-        local same = (tonumber(e.id) == tonumber(id)) or (alertName and GetSpellInfo(e.id) == alertName)
+        -- Exact spell ID only: name matching could light an icon that merely
+        -- shares a name with the alerted spell.
+        local same = (tonumber(e.id) == tonumber(id))
         if same then
           f.overlay = on or nil
           UpdateCDIcon(f, profile)
@@ -1305,7 +1319,9 @@ local function FindAnyAura(unit, filter, entry)
   local ids = C:AuraIDs(entry, idScratch)
   local onlyMine = entry and entry.onlyMine and true or false
   for i = 1, #ids do
-    local tex, count, duration, expires = FindAura(unit, filter, ids[i], nil, onlyMine)
+    -- exact = true: an aura only counts when its own spell ID matches. Without
+    -- it a same-named aura from another spell ID would light the icon too.
+    local tex, count, duration, expires = FindAura(unit, filter, ids[i], true, onlyMine)
     if tex then return tex, count, duration, expires end
   end
 end
@@ -1576,7 +1592,19 @@ function C:UpdatePower()
         slot.bar:SetMinMaxValues(0, max > 0 and max or 1)
         SetPowerValue(slot, cur, cfg.smooth and true or false)
         slot.text:SetText(txt)
+        -- Low warning: the fill is only repainted on the edge, so a bar that
+        -- stays above (or below) the threshold costs nothing extra.
+        local low = false
+        if cfg.warnEnabled and max > 0 then
+          low = (cur * 100) <= (max * (cfg.warnPct or 30))
+        end
+        if slot.warnOn ~= low then
+          slot.warnOn = low
+          local col = low and C:BarWarnColor(cfg) or slot.baseColor
+          if col then slot.bar:SetStatusBarColor(col[1], col[2], col[3]) end
+        end
       end
+
     end
   end
 end
@@ -1636,29 +1664,38 @@ local function UpdateComboSlot(slot)
     local unit = cp.onTarget and "target" or "player"
     -- Buff / debuff is an explicit choice, exactly like the resource bar.
     local filter = (cp.comboAuraType == "HARMFUL") and "HARMFUL" or "HELPFUL"
-    local _, count = FindAura(unit, filter, cp.spellID)
+    local _, count = FindAura(unit, filter, cp.spellID, true)
     value = count or 0
   else
     value = GetComboPoints("player", "target") or 0
   end
   local col = C:BarColor(cp)
+  -- Low warning: while only a few points are lit, the lit ones switch to the
+  -- warning colour. The state string carries the warning so the change cache
+  -- below still catches a repaint that only changed the colour.
+  local warn = false
+  if cp.warnEnabled and value > 0 and value <= (cp.warnCount or 2) then
+    warn = true
+    col = C:BarWarnColor(cp)
+  end
   for i, box in ipairs(slot.points) do
     if box:IsShown() then
       -- Empty points read as the same dark plate the resource bars sit on.
-      local plateCol = box.litColor or col
+      local plateCol = (warn and col) or box.litColor or col
       local state
       if i <= value then
-        state = "full"
+        state = warn and "fullwarn" or "full"
       elseif cp.useCharges and i == value + 1 and partial > 0 then
-        state = "grow"
+        state = warn and "growwarn" or "grow"
       else
         state = "empty"
       end
+
       -- Re-anchoring the fill is the expensive part, so a plate only moves and
       -- re-colours when its state actually changed.
-      if state == "grow" then
+      if state == "grow" or state == "growwarn" then
         -- The growing point: the plate fills from the left as it recharges.
-        if box.jcdState ~= "grow" then
+        if box.jcdState ~= state then
           box.fill:ClearAllPoints()
           box.fill:SetPoint("TOPLEFT", 1, -1)
           box.fill:SetPoint("BOTTOMLEFT", 1, 1)
@@ -1669,12 +1706,13 @@ local function UpdateComboSlot(slot)
         box.fill:ClearAllPoints()
         box.fill:SetPoint("TOPLEFT", 1, -1)
         box.fill:SetPoint("BOTTOMRIGHT", -1, 1)
-        if state == "full" then
+        if state == "full" or state == "fullwarn" then
           box.fill:SetVertexColor(plateCol[1], plateCol[2], plateCol[3], 1)
         else
           box.fill:SetVertexColor(C.BACKDROP[1], C.BACKDROP[2], C.BACKDROP[3], 1)
         end
       end
+
       box.jcdState = state
     end
   end

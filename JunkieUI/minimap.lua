@@ -90,7 +90,22 @@ J:AddModule(function()
   MiniMapVoiceChatFrame:Hide()
   MiniMapWorldMapButton:Hide()
   MinimapZoneTextButton:Hide()
-  MiniMapTracking:Hide()
+  -- Tracking button: Blizzard's own frame, kept clickable in the top left
+  -- corner. Only the round border art is dropped so it matches the flat map;
+  -- the button, its icon and its dropdown are untouched.
+  if MiniMapTracking then
+    MiniMapTracking:Show()
+    MiniMapTracking:SetScale(0.9)
+    for _, art in ipairs({ "MiniMapTrackingBorder", "MiniMapTrackingButtonBorder",
+                           "MiniMapTrackingBackground", "MiniMapTrackingShine" }) do
+      local t = _G[art]
+      if t then if t.SetTexture then t:SetTexture(nil) end t:Hide() end
+    end
+    if MiniMapTrackingButton then MiniMapTrackingButton:Show() end
+    if MiniMapTrackingIcon then
+      MiniMapTrackingIcon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+    end
+  end
   MiniMapMailBorder:Hide()
   if MiniMapMailFrame then
     MiniMapMailFrame:ClearAllPoints()
@@ -106,6 +121,8 @@ J:AddModule(function()
     { "MinimapNorthTag",          "TOP",        "TOP",        0, -2, nil, "OVERLAY" },
     { "MiniMapInstanceDifficulty", "TOPLEFT",   "TOPLEFT",   -6,  6, 0.8 },
     { "MiniMapLFGFrame",          "BOTTOMLEFT", "BOTTOMLEFT", 5, 26, 0.9 },
+    -- Tracking sits inside the top left corner, mirroring the mail icon.
+    { "MiniMapTracking",          "TOPLEFT",    "TOPLEFT",    2, -2, 0.9 },
   }
 
   local function PinCorners()

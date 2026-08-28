@@ -74,7 +74,9 @@ local box, bar, label
 -- 4. Filters
 -- ---------------------------------------------------------------------------
 local blacklist = {
+  MiniMapTracking           = true,
   MiniMapTrackingFrame      = true,
+  MiniMapTrackingButton     = true,
   MiniMapMailFrame          = true,
   MiniMapBattlefieldFrame   = true,
   MinimapZoomIn             = true,

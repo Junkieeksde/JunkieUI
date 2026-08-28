@@ -708,19 +708,72 @@ end
 -- absurd width/height instead of a scale, which balloons a single button over
 -- half the screen. SetWidth/SetHeight are not protected either, so this is safe
 -- in lockdown as well; both are only written when the value actually drifted.
-local function NormalizeStanceFrame()
+-- Art clamp for one stance button. Nothing here is a protected call, so it is
+-- safe in lockdown. Two layers can cover the screen on this client:
+--   * the cooldown frame - if a form cooldown starts while the button is still
+--     in Blizzard's own oversized login layout, the frame keeps that size and
+--     its edge spark paints a starburst across the whole screen;
+--   * the checked plate - Blizzard re-applies it whenever the active form
+--     changes, and on an oversized button it is a screen wide yellow square.
+-- Both are re-pinned/stripped, and any remaining art region that grew past
+-- twice the button edge is pinned back onto the button.
+local function NormalizeStanceArt(b, name)
+  local cd = _G[name .. "Cooldown"]
+  if cd then
+    if not b.JUI_stanceCD then
+      b.JUI_stanceCD = true
+      cd:ClearAllPoints()
+      cd:SetPoint("TOPLEFT", b, "TOPLEFT", 1, -1)
+      cd:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", -1, 1)
+    end
+    if cd.SetDrawEdge then cd:SetDrawEdge(false) end
+    if cd.GetScale and cd:GetScale() ~= 1 then cd:SetScale(1) end
+  end
+
+  if b.GetCheckedTexture then
+    local ck = b:GetCheckedTexture()
+    if ck and (ck:IsShown() or ck:GetTexture()) then
+      ck:SetTexture(nil)
+      ck:SetAlpha(0)
+      ck:Hide()
+    end
+  end
+
+  local limit = BASESIZE * 2
+  local n = b.GetNumRegions and b:GetNumRegions() or 0
+  for i = 1, n do
+    local r = select(i, b:GetRegions())
+    if r and r.GetObjectType and r:GetObjectType() == "Texture" then
+      local w = r:GetWidth() or 0
+      local h = r:GetHeight() or 0
+      if w > limit or h > limit then
+        r:ClearAllPoints()
+        r:SetAllPoints(b)
+      end
+    end
+  end
+end
+
+local function NormalizeStanceFrame(deep)
   local f = ShapeshiftBarFrame
   if not f then return end
   if f.GetScale and f:GetScale() ~= 1 then f:SetScale(1) end
   for i = 1, 10 do
-    local b = _G["ShapeshiftButton" .. i]
+    local name = "ShapeshiftButton" .. i
+    local b = _G[name]
     if b then
-      if b.GetScale and b:GetScale() ~= 1 then b:SetScale(1) end
-      if b.GetWidth and floor(b:GetWidth() + 0.5) ~= BASESIZE then b:SetWidth(BASESIZE) end
-      if b.GetHeight and floor(b:GetHeight() + 0.5) ~= BASESIZE then b:SetHeight(BASESIZE) end
+      local drift = false
+      if b.GetScale and b:GetScale() ~= 1 then b:SetScale(1); drift = true end
+      if b.GetWidth and floor(b:GetWidth() + 0.5) ~= BASESIZE then b:SetWidth(BASESIZE); drift = true end
+      if b.GetHeight and floor(b:GetHeight() + 0.5) ~= BASESIZE then b:SetHeight(BASESIZE); drift = true end
+      -- The full art clamp is the expensive part (a region walk), so it only
+      -- runs when the geometry actually drifted or when a caller asks for it
+      -- explicitly (login, zone-in, form change).
+      if drift or deep then NormalizeStanceArt(b, name) end
     end
   end
 end
+J.NormalizeStanceFrame = NormalizeStanceFrame
 
 -- Cheap fingerprint of the anchor the bar currently carries. Blizzard's own
 -- login pass (and UIParent_ManageFramePositions) can re-anchor or re-scale the
@@ -750,14 +803,14 @@ end
 local function PlaceStanceBar(used, force)
   if InCombatLockdown and InCombatLockdown() then
     -- Secure buttons cannot be re-anchored while locked down, so the geometry
-    -- pass is deferred to PLAYER_REGEN_ENABLED. The scale fix above still runs,
-    -- which is what keeps the bar from blowing up mid-fight.
-    NormalizeStanceFrame()
+    -- pass is deferred to PLAYER_REGEN_ENABLED. The scale/art fix above still
+    -- runs, which is what keeps the bar from blowing up mid-fight.
+    NormalizeStanceFrame(true)
     state.stancePending = true
     state.stanceSig = nil
     return false
   end
-  NormalizeStanceFrame()
+  NormalizeStanceFrame(force and true or false)
 
 
   local numForms = (GetNumShapeshiftForms and GetNumShapeshiftForms()) or 0
@@ -843,6 +896,10 @@ local function StartStanceSettle()
       -- The toggle may have been switched off while the pass was running; the
       -- parked bar must never be dragged back onto the screen.
       if not (J.db and J.db.stanceBar) then self:Hide() return end
+      -- Deep art clamp on every settle step: a cooldown frame or checked plate
+      -- left oversized by Blizzard's login pass does not change the geometry
+      -- fingerprint, so the placement below would otherwise skip it.
+      NormalizeStanceFrame(true)
       PlaceStanceBar(nil, false)
       if not STANCE_SETTLE[self.i] then self:Hide() end
     end)
@@ -1331,13 +1388,22 @@ J:AddModule(function()
   events:RegisterEvent("PLAYER_ENTERING_WORLD")
   events:RegisterEvent("UNIT_PET")
   events:RegisterEvent("PET_BAR_UPDATE")
+  -- Rare, and the only moment Blizzard re-applies the checked plate: one deep
+  -- art clamp per form change costs nothing and is safe in lockdown.
+  events:RegisterEvent("UPDATE_SHAPESHIFT_FORM")
+  events:RegisterEvent("UPDATE_SHAPESHIFT_FORMS")
   events:SetScript("OnEvent", function(_, event, unit)
     -- UNIT_PET fires for every raid member's pet. Only our own pet can move
     -- the pet bar, so everyone else's summons are dropped immediately.
     if event == "UNIT_PET" and unit ~= "player" and unit ~= "pet" then return end
+    if event == "UPDATE_SHAPESHIFT_FORM" or event == "UPDATE_SHAPESHIFT_FORMS" then
+      NormalizeStanceFrame(true)
+      return
+    end
     if state.layoutPending then ApplyLayout() end
     if event == "PLAYER_ENTERING_WORLD" then
       StripBlizzardArt()
+      NormalizeStanceFrame(true)
       -- Short, self-terminating re-check so the stance column ends up correct
       -- straight after login instead of only after opening the options panel.
       StartStanceSettle()
@@ -1359,6 +1425,13 @@ J:AddModule(function()
     if ShapeshiftBar_Update then
       hooksecurefunc("ShapeshiftBar_Update", function()
         if J.db and J.db.stanceBar then PlaceStanceBar() end
+      end)
+    end
+    -- The state pass is where Blizzard calls SetChecked on the active form, so
+    -- the plate is stripped again right after it is put back.
+    if ShapeshiftBar_UpdateState then
+      hooksecurefunc("ShapeshiftBar_UpdateState", function()
+        if J.db and J.db.stanceBar then NormalizeStanceFrame(true) end
       end)
     end
   end
