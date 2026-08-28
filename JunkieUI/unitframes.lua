@@ -733,12 +733,12 @@ J:AddModule(function()
   park:Hide()
   -- Leave FocusFrame entirely untouched. On several 3.3.5 clients it is tied
   -- to the protected focus-target path; even parking it can block /focus.
-  -- Boss frames are not part of JunkieUI. Park Blizzard's originals alongside
-  -- the player/target frames so deleting the old custom boss module cannot
-  -- make the stock frames reappear.
+  -- Blizzard's boss frames are replaced by bossframes.lua, so the originals
+  -- are unregistered and parked here together with the player/target frames.
   for _, f in pairs({
     PlayerFrame, TargetFrame, TargetFrameToT, ComboFrame,
     Boss1TargetFrame, Boss2TargetFrame, Boss3TargetFrame, Boss4TargetFrame,
+    Boss5TargetFrame,
   }) do
     if f then
       f:UnregisterAllEvents()

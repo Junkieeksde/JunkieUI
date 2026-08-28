@@ -366,7 +366,7 @@ local function BuildPanel()
   local function Select(index)
     for i, t in ipairs(tabs) do t.selected = (i == index); t:Refresh() end
     for i, p in ipairs(pages) do if i == index then p:Show() else p:Hide() end end
-    if index == 10 and J.RefreshCDPage then J.RefreshCDPage() end
+    if index == 11 and J.RefreshCDPage then J.RefreshCDPage() end
   end
   panel.SelectPage = Select
 
@@ -400,14 +400,14 @@ local function BuildPanel()
   end
 
   local names = {
-    "General", "Unitframes", "Actionbars", "Buffs & debuffs",
+    "General", "Unitframes", "Bossframes", "Actionbars", "Buffs & debuffs",
     "Minimap", "Movers", "Tooltip", "QoL", "About",
   }
   SideLabel("General")
   for i, n in ipairs(names) do SideEntry(i, n) end
   sy = sy - 12
   SideLabel("Modules")
-  SideEntry(10, "Cooldown manager")
+  SideEntry(11, "Cooldown manager")
 
   -- Page 1: General ---------------------------------------------------------
   local gen = pages[1]
@@ -545,8 +545,24 @@ local function BuildPanel()
 
 
 
-  -- Page 3: Actionbars -----------------------------------------------------
-  local a = pages[3]
+  -- Page 3: Boss frames ----------------------------------------------------
+  local bf = pages[3]
+  y = -14
+  Header(bf, "Boss frames", y); y = y - 22
+  Hint(bf, "Target frame styling, 30% narrower, name shortened to 10 characters. No buffs, debuffs or castbar - only the raid target mark.", y)
+  y = y - 34
+  MakeCheck(bf, "Move boss frames", y, J.db.bossUnlocked, function(v)
+    if J.SetBossUnlocked then J:SetBossUnlocked(v) else J.db.bossUnlocked = v end
+  end)
+  y = y - 24
+  Hint(bf, "Placeholders appear in the exact size and position of the real frames and are dragged as one group.", y)
+  y = y - 28
+  MakeButton(bf, "Reset position", 120, 22, function()
+    if J.ResetBossFrames then J:ResetBossFrames() end
+  end):SetPoint("TOPLEFT", bf, "TOPLEFT", 14, y)
+
+  -- Page 4: Actionbars -----------------------------------------------------
+  local a = pages[4]
   y = -14
   Header(a, "Actionbars", y); y = y - 26
   Hint(a, "For cooldown text, use OmniCC.", y)
@@ -614,10 +630,10 @@ local function BuildPanel()
 
 
 
-  -- Page 4: Buffs & debuffs ------------------------------------------------
+  -- Page 5: Buffs & debuffs ------------------------------------------------
   -- The player's auras are Blizzard's own (C-driven) frame, only re-dressed by
   -- blizzbuffs.lua. Nothing on this page costs anything per frame.
-  local bd = pages[4]
+  local bd = pages[5]
   y = -14
   Header(bd, "Player auras", y); y = y - 22
   Hint(bd, "Squared-off Blizzard buffs, docked to the left of the minimap.", y); y = y - 28
@@ -628,8 +644,8 @@ local function BuildPanel()
   end)
   y = y - 50
 
-  -- Page 5: Minimap ---------------------------------------------------------
-  local mm = pages[5]
+  -- Page 6: Minimap ---------------------------------------------------------
+  local mm = pages[6]
   y = -14
   Header(mm, "Minimap", y); y = y - 22
   Hint(mm, "Step 1 is the default size, step 5 is 20% larger.", y); y = y - 24
@@ -640,8 +656,8 @@ local function BuildPanel()
   y = y - 50
   Hint(mm, "Clock, button box and player auras follow the map size.", y)
 
-  -- Page 6: Movers ----------------------------------------------------------
-  local m = pages[6]
+  -- Page 7: Movers ----------------------------------------------------------
+  local m = pages[7]
   y = -14
   Header(m, "Movable frames", y); y = y - 26
   MakeCheck(m, "Unlock the focus frame so you can drag it", y, J.db.focusUnlocked, function(v)
@@ -667,8 +683,8 @@ local function BuildPanel()
 
 
 
-  -- Page 7: Tooltip ---------------------------------------------------------
-  local tt = pages[7]
+  -- Page 8: Tooltip ---------------------------------------------------------
+  local tt = pages[8]
   y = -14
   Header(tt, "Tooltip", y); y = y - 26
   MakeCheck(tt, "Unlock the tooltip so you can drag it", y, J.db.tooltipUnlocked, function(v)
@@ -679,8 +695,8 @@ local function BuildPanel()
     J.db.tooltipIDs = v
   end)
 
-  -- Page 8: Quality of life -------------------------------------------------
-  local q = pages[8]
+  -- Page 9: Quality of life -------------------------------------------------
+  local q = pages[9]
   y = -14
   Header(q, "Auto repair", y); y = y - 24
   Hint(q, "Repairs all gear when you open a repair merchant.", y); y = y - 22
@@ -688,8 +704,8 @@ local function BuildPanel()
     J.db.autoRepair = v
   end)
 
-  -- Page 9: About -----------------------------------------------------------
-  local o = pages[9]
+  -- Page 10: About -----------------------------------------------------------
+  local o = pages[10]
   y = -14
   Header(o, "About", y); y = y - 24
   Hint(o, "Plug and play. No profiles, no fuss.", y); y = y - 16
@@ -698,8 +714,8 @@ local function BuildPanel()
   Hint(o, "For the best experience, avoid other addons that", y); y = y - 14
   Hint(o, "reposition or reskin UI elements while using Junkie UI.", y)
 
-  -- Page 10: Cooldown manager (JunkieCD plugs in here) ------------------------
-  local cdp = pages[10]
+  -- Page 11: Cooldown manager (JunkieCD plugs in here) ------------------------
+  local cdp = pages[11]
 
   local host = CreateFrame("Frame", "JunkieCDHost", cdp)
   host:SetPoint("TOPLEFT", cdp, "TOPLEFT", 6, -6)
@@ -923,7 +939,7 @@ function J:OpenCooldownManager()
   end
   EnsurePanel()
   panel:Show()
-  panel.SelectPage(10)
+  panel.SelectPage(11)
   return true
 end
 

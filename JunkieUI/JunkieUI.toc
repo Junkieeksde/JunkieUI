@@ -12,6 +12,7 @@ minimapbuttons.lua
 xp.lua
 actionbars.lua
 unitframes.lua
+bossframes.lua
 castbars.lua
 blizzbuffs.lua
 chat.lua
